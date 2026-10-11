@@ -203,15 +203,31 @@ src/native/            Objective-C++ Metal runtime      src/server/         sche
 scripts/               goldens, bench, quantize, calibrate, serve, loadgen, repl, run_tests
 ```
 
-## Tiny Aya (in progress)
+## Tiny Aya
 
-The engine is being extended to [Tiny Aya Global](https://huggingface.co/CohereLabs/tiny-aya-global) (Cohere2, 3.35B
+The engine also runs [Tiny Aya Global](https://huggingface.co/CohereLabs/tiny-aya-global) (Cohere2, 3.35B
 parameters, 70 languages): plan in [`docs/tiny-aya-plan.md`](docs/tiny-aya-plan.md), results in
 [`docs/results-log.md`](docs/results-log.md). On an 8 GB Mac it serves up to 8,192 tokens in INT4 (6,144 for
 `/v1/decide`) and 4,096 in INT8, so as to stay within the GPU memory Metal recommends. With `serve.py --prefix-cache`
 its chat template's 352-token preamble is prefilled once and kept in the KV pool, so a one-line chat prefills only the
 ~20 tokens after it: on a real server the first token comes 4x sooner (INT4 1.88 s -> 0.45 s; a burst of 8 chats p95
-15.3 s -> 2.2 s). Tiny Aya is by Cohere and
+15.3 s -> 2.2 s).
+
+| Tiny Aya Global | this engine INT4 (2.34 GB) | llama.cpp Q4_K_M (2.14 GB) | llama.cpp Q4_0 (2.03 GB) | MLX-LM 4-bit (1.88 GB) |
+|---|---:|---:|---:|---:|
+| KL from fp32, mean of 8 languages (lower is better) | 0.080 | **0.051** | 0.102 | 0.154 |
+| single-stream decode | 30 tok/s | 35–38 tok/s | 40–42 tok/s | **45 tok/s** |
+| batch-8 aggregate decode | 63–65 tok/s (INT8: 67–69) | 63 tok/s | **70–74 tok/s** | 49–50 tok/s |
+| prefill, 256 tokens | 254–264 tok/s | 343–347 tok/s | **388–390 tok/s** | 261 tok/s |
+
+On Tiny Aya this engine is behind llama.cpp: Q4_K_M does the least 4-bit damage in all 8 languages from a smaller file,
+llama.cpp decodes faster at one stream, and Q4_0 is faster at every batch size (Q4_K_M ties our INT4 at batch 8). On the
+same long text Qwen3.5-2B's INT4 is at KL 0.067 (the 0.045 in the Qwen table above is on short prompts, against HF
+bf16). Same Mac, same text, one engine in memory at a time; details in
+[`docs/bench/aya-4bit.md`](docs/bench/aya-4bit.md) (quality per language, tokens per character) and
+[`docs/bench/compare.md`](docs/bench/compare.md) (speed).
+
+Tiny Aya is by Cohere and
 Cohere Labs. Its weights are not part of this repository: they are gated on Hugging Face, licensed
 [CC-BY-NC 4.0 with an Acceptable Use Addendum](https://cohere.com/cohere-labs-cc-by-nc-license), subject to the
 [Cohere Labs Acceptable Use Policy](https://docs.cohere.com/docs/cohere-labs-acceptable-use-policy), and provided as

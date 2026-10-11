@@ -1,0 +1,11 @@
+0.00.421.523 W load: special_eos_id is not in special_eog_ids - the tokenizer config may be incorrect
+
+llama_batched_bench: n_kv_max = 2048, n_batch = 2048, n_ubatch = 512, flash_attn = -1, is_pp_shared = 0, is_tg_separate = 0, n_gpu_layers = 99, n_threads = 4, n_threads_batch = 4
+
+|    PP |     TG |    B |   N_KV |   T_PP s | S_PP t/s |   T_TG s | S_TG t/s |      T s |    S t/s |
+|-------|--------|------|--------|----------|----------|----------|----------|----------|----------|
+|    16 |     32 |    1 |     48 |    0.111 |   143.66 |    0.878 |    36.44 |    0.990 |    48.50 |
+|    16 |     32 |    2 |     96 |    0.125 |   255.79 |    1.550 |    41.28 |    1.675 |    57.30 |
+|    16 |     32 |    4 |    192 |    0.225 |   283.85 |    2.175 |    58.85 |    2.400 |    79.99 |
+|    16 |     32 |    8 |    384 |    0.437 |   292.59 |    4.084 |    62.68 |    4.522 |    84.92 |
+

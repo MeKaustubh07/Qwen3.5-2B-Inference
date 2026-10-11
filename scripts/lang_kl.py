@@ -9,6 +9,8 @@ usage: lang_kl.py ref aya|qwen OUT_DIR                     reference (Tiny Aya f
                                                           checkpoint is quantized in memory under that recipe
        lang_kl.py llama GGUF REF_DIR OUT_DIR              llama.cpp's own llama-perplexity --kl-divergence on each file
        lang_kl.py table RESULTS_DIR                       a markdown table of every result in RESULTS_DIR
+       lang_kl.py tpc [N_CHARS]                           tokens per 1,000 characters, Qwen3.5 vs Tiny Aya, on the first
+                                                          N_CHARS (20,000) of each language's text
 
 Text: two 512-token windows per language (8 languages) cut from the public-domain works of scripts/long_texts.py at 25%
 and 60% of each work, past its famous opening; Tiny Aya's windows start with BOS, Qwen3.5's have none. Scored: positions
@@ -273,6 +275,18 @@ def table(results: str) -> None:
                   f" | {sum(r[l]['kld_mean'] for l in LANGS) / len(LANGS):.4f} |")
 
 
+def tpc(n_chars: int) -> None:
+    """Tokens per 1,000 characters with both models' tokenizers (src/tokenizer.py, equal to HF), no BOS."""
+    sys.path.insert(0, str(ROOT / "src"))
+    from tokenizer import Tokenizer
+    qwen, aya = (Tokenizer(str(ROOT / f"models/{m}/tokenizer.json")) for m in ("qwen3.5-2b", "tiny-aya-global"))
+    print("| language | characters | Qwen3.5 | Tiny Aya | Qwen3.5 / Tiny Aya |\n|---|---:|---:|---:|---:|")
+    for lang in LANGS:
+        text = long_texts.section(lang)[:n_chars]
+        q, a = (len(t.encode(text)) * 1000 / len(text) for t in (qwen, aya))
+        print(f"| {lang} | {len(text):,} | {q:.1f} | {a:.1f} | {q / a:.2f}x |")
+
+
 def main() -> None:
     a = sys.argv[1:]
     opt = lambda flag: a[a.index(flag) + 1] if flag in a else None
@@ -289,6 +303,8 @@ def main() -> None:
         llama(*a[1:4])
     elif a[0] == "table":
         table(a[1])
+    elif a[0] == "tpc":
+        tpc(int(a[1]) if len(a) > 1 else 20000)
     else:
         sys.exit(__doc__)
 

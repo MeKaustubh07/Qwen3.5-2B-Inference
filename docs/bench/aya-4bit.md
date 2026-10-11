@@ -38,7 +38,7 @@ MacBook Air M2 (8 GB), one engine in memory at a time. Raw output: [`raw/aya_lan
 | llama.cpp Q4_0 | 0.0853 | 0.0869 | 0.1004 | 0.0932 | 0.0780 | 0.1117 | 0.1273 | 0.1327 | 0.1020 |
 | **llama.cpp Q4_K_M** | **0.0470** | **0.0405** | **0.0436** | **0.0495** | **0.0363** | **0.0576** | **0.0708** | **0.0632** | **0.0511** |
 | MLX-LM `convert -q` (4 bits everywhere) | 0.1481 | 0.1377 | 0.1555 | 0.1651 | 0.1007 | 0.1592 | 0.1863 | 0.1760 | 0.1536 |
-| MLX-LM, recipe `mixed_4_6` (1.99 GB) | 0.1164 | 0.1165 | 0.1239 | 0.1326 | 0.0808 | 0.1173 | 0.1448 | 0.1408 | 0.1216 |
+| MLX-LM, recipe `mixed_4_6` (1.99 GB) | 0.1164 | 0.1165 | 0.1239 | 0.1326 | 0.0808 | 0.1173 | 0.1448 | 0.1408 | 0.1217 |
 | MLX-LM, Q4_K_M's bit layout (2.12 GB) | 0.0736 | 0.0701 | 0.0819 | 0.0818 | 0.0615 | 0.0884 | 0.1141 | 0.1095 | 0.0851 |
 | Qwen3.5-2B, this engine INT8 | 0.0009 | 0.0007 | 0.0008 | 0.0009 | 0.0007 | 0.0010 | 0.0010 | 0.0010 | 0.0009 |
 | Qwen3.5-2B INT4, nothing kept INT8 but the embedding | 0.0679 | 0.0716 | 0.0708 | 0.0690 | 0.0698 | 0.1198 | 0.1004 | 0.1076 | 0.0846 |
@@ -66,15 +66,37 @@ converted model to the last digit, and this engine's INT4 quantized at load equa
 - **This engine's INT4 is not the best 4-bit build.** Q4_K_M beats it in every language from a file 200 MB smaller
   (0.051 vs 0.080), and keeping its 10 most damaged tensors INT8 (0.065) does not catch up. It beats Q4_0 (0.102) and
   MLX-LM's default. The likely gap is the rounding (min/max per block of 32, no search).
-- **Languages.** zh and ja are the two worst in every 4-bit build, 1.2-1.6x en per token (3.7-6x per character: Tiny Aya
-  spends 0.91 tokens per Chinese character and 0.24 per English one on these texts); hi is never worse than en. But the
-  ranking follows how unsure the reference is on each work (reference perplexity en 21.6, hi 20.1, zh 95.8, ja 113.5;
-  rank correlation with the KL 0.90-0.98 across builds), so with one work per language, script and text cannot be told
-  apart.
+- **Languages.** zh and ja are the two worst in every 4-bit build, 1.2-1.6x en per token (3.2-6x per character: on
+  these windows Tiny Aya spends 0.92 tokens per Chinese character and 0.24 per English one; 0.94 and 0.25 on the
+  works' openings, table below); hi is never worse than en. But the ranking follows how unsure the reference is on
+  each work (reference perplexity en 21.6, hi 20.1, zh 95.8, ja 113.5; rank correlation with the KL 0.90-0.98 for
+  seven of the eight 4-bit builds, 0.83 for MLX-LM `mixed_4_6`), so with one work per language, script and text cannot
+  be told apart.
 - **Agrees with Cohere's report:** it picks Q4_K_M as the best trade-off (an average judge-score drop of 1.4 points vs
   2.1 for Q4_0, Tiny Aya report §6); here Q4_K_M is the best of the eight 4-bit builds in all eight languages.
 - **KL is not quality.** Marchisio et al. (2024) found a quantized model's Japanese drop at 1.7% on automatic metrics
   but 16% with human raters; a KL table cannot show that.
+
+## Tokens per character
+
+How many tokens each tokenizer spends on the same text (`lang_kl.py tpc`: the first 20,000 characters of each
+language's work, or all of it where shorter; both tokenizers as the engine runs them, equal to HF, no BOS). Fewer tokens
+per character means fewer decode steps for the same reply, and every one of those steps carries the per-token KL above.
+
+| language | characters | Qwen3.5 tokens / 1,000 chars | Tiny Aya | Qwen3.5 / Tiny Aya |
+|---|---:|---:|---:|---:|
+| en | 20,000 | 254.8 | 248.9 | 1.02x |
+| fr | 20,000 | 287.4 | 272.4 | 1.05x |
+| de | 20,000 | 264.7 | 255.4 | 1.04x |
+| es | 20,000 | 281.2 | 279.6 | 1.01x |
+| hi | 16,300 | 511.7 | 397.4 | 1.29x |
+| ar | 20,000 | 337.4 | 317.2 | 1.06x |
+| zh | 20,000 | 875.0 | 940.2 | 0.93x |
+| ja | 6,128 | 676.6 | 636.3 | 1.06x |
+
+Tiny Aya is the more economical tokenizer on Hindi (Qwen3.5 needs 1.29x the tokens) and slightly on the European
+languages, Arabic and Japanese; Qwen3.5 is more economical on Chinese. The Tiny Aya report's tokenizer comparison (§2.1,
+Fig. 3) shows a far larger Devanagari gap against Qwen3, whose 152K vocabulary is older than Qwen3.5's 248K.
 
 ## Reproduce
 
@@ -86,6 +108,7 @@ scripts/.venv/bin/python scripts/lang_kl.py llama tiny-aya-global-q4_k_m.gguf RE
 MLX_PY scripts/lang_kl.py mlx models/tiny-aya-global REF_AYA mlx_q4km.json --recipe q4km_bits         # an MLX-LM 0.31.3 venv
 scripts/.venv/bin/python scripts/lang_kl.py ref qwen REF_QWEN           # ~8.5 min CPU (HF bf16)
 scripts/.venv/bin/python scripts/lang_kl.py table RESULTS_DIR
+scripts/.venv/bin/python scripts/lang_kl.py tpc                # tokens per 1,000 characters, both tokenizers
 ```
 
 Limitations: 510 scored positions per language (s.e. 0.002-0.006 on each mean); one work per language; KL against a

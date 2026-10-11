@@ -1,8 +1,12 @@
-# Qwen3.5-2B on an M2 Air: this engine vs llama.cpp vs MLX-LM
+# This engine vs llama.cpp vs MLX-LM on an M2 Air: Qwen3.5-2B and Tiny Aya
+
+Two models: Qwen3.5-2B (below, 2026-09-28) and [Tiny Aya Global](#tiny-aya-global-335b-2026-10-11) (2026-10-11).
+Quality per language for Tiny Aya's 4-bit builds is in [`aya-4bit.md`](aya-4bit.md).
 
 All numbers measured on one MacBook Air M2 (Mac14,2: 8-core GPU, 4P+4E CPU, 8 GB, ~100 GB/s), one engine in
-memory at a time, VS Code and other heavy apps closed. Raw tool output: `docs/bench/raw/`. The GGUF and MLX files are
-no longer kept locally (removed 2026-09-30); to reproduce, download them again from the repositories named below.
+memory at a time, VS Code and other heavy apps closed. Raw tool output: `docs/bench/raw/`. Qwen3.5-2B's GGUF
+and MLX files are no longer kept locally (removed 2026-09-30); to reproduce, download them again from the repositories
+named below.
 
 | engine | version | weights | language-model weights (decimal GB) |
 |---|---|---|---:|
@@ -79,3 +83,70 @@ not profiled.
 2. Fewer, larger dispatches per decode step (fuse norm + projection, command-buffer reuse, or a C++ step loop):
    the single-stream gap to MLX that bytes do not explain.
 3. An INT4 head option, after measuring its accuracy cost on Qwen3.5 (not done yet).
+
+## Tiny Aya Global (3.35B), 2026-10-11
+
+Same Mac, one engine in memory at a time. Two full passes in opposite order (ours INT4, Q4_K_M, MLX, ours INT8, Q4_0, then
+back), 90 s of idle between engines; the table gives both passes (A / B), measured 00:35-01:09 on 2026-10-11. A first pass under memory pressure and heat (it
+ran next to other work; llama.cpp read 18 tok/s single-stream) was discarded. Raw output and the run script:
+[`raw/aya_speed/`](raw/aya_speed/).
+
+| engine | version | weights (decimal GB) |
+|---|---|---:|
+| this engine, INT4 / INT8 | engine code of `ecc1c71` (`src/` unchanged through `d4de954`) | 2.34 / 3.56 (`.qt`; tied embedding/head INT8 in both) |
+| llama.cpp | build 11146 (7fe450e19) | Q4_0 2.03, Q4_K_M 2.14 (Cohere's own GGUFs, `CohereLabs/tiny-aya-global-GGUF`) |
+| MLX-LM | 0.31.3 (mlx 0.32.2) | 1.88 (`mlx_lm convert -q` from the official weights: 4 bits, group 64, the tied head too; no MLX 4-bit Global is published) |
+
+| metric (tok/s) | ours INT4 | ours INT8 | llama.cpp Q4_0 | llama.cpp Q4_K_M | MLX-LM 4-bit |
+|---|---:|---:|---:|---:|---:|
+| decode, 1 stream | 30.0 / 29.5 | 20.0 / 22.9 | 41.8 / 39.7 (bench) · 39.9 / 41.6 (batched) | 34.6 / 36.8 · 36.4 / 37.7 | **44.6 / 44.8** |
+| prefill, 100-token prompt | 172 / 179 | 177 / 169 | **303 / 301** | 265 / 269 | 191 / 188 |
+| time to first token, 100-token prompt (ms) | 580 / 558 | 566 / 590 | **330 / 332**\* | 377 / 372\* | 523 / 533\* |
+| prefill, 256 | 254 / 264 | 231 / 256 | **390 / 388** | 343 / 347 | 261 / 261 |
+| prefill, 1024 | 266 / 279 | 185 / 267 | **379 / 378** | 333 / 339 | 272 / 266 |
+| batch 2, aggregate decode | 29.8 / 30.3 | 26.8 / 30.0 | **49.6 / 51.2** | 41.3 / 41.8 | 44.5 / 45.1 |
+| batch 4 | 47.7 / 45.1 | 43.8 / 50.3 | **74.1 / 73.9** | 58.9 / 59.4 | 46.0 / 45.2 |
+| batch 8 | 62.8 / 64.7 | 68.5 / 67.1 | **73.9 / 70.2** | 62.7 / 63.2 | 48.8 / 49.6 |
+| 100 in / 100 out, decode | 28.7 / 28.3 | 22.0 / 21.0 | 39.2 / 38.1 | 36.4 / 37.8 | **44.5 / 39.4** |
+
+How each number was produced: as for Qwen3.5 above (ours: `scripts/bench.py --model tiny-aya-global --backend
+metal-int4|int8 --weights models/tiny-aya-global/model.int4|int8.qt --prompt-lens 16,100,256,1024 --new 32 --batch
+1,2,4,8`, plus `--prompt-lens 100 --new 100`; decode, 1 stream = `decode_batch` at B = 1, 100 in / 100 out = its decode
+row); llama.cpp: `llama-bench -p 100,256,1024 -n 32,100 -ngl 99 -r 5` and `llama-batched-bench -c 2048 -npp 16 -ntg 32
+-npl 1,2,4,8 -ngl 99`; MLX-LM: `mlx_lm.benchmark -p 16 -g 32 -b B -n 5`, `-p 256|1024 -g 32 -b 1`, `-p 100 -g 100 -b 1`.
+llama.cpp's 100 in / 100 out row is `llama-bench` tg100, i.e. decode from an empty context (ours and MLX-LM decode
+after the 100-token prompt). As in the Qwen3.5 section, MLX-LM's B = 1 `generation_tps` reads ~3% high against a
+per-step median like ours.
+
+\* The time to first token is 100 / the 100-token prefill rate for every engine: measured by `bench.py` for ours (its
+prefill rate is computed from it), derived from llama-bench's pp100 and MLX-LM's prompt_tps for the other two.
+
+Swap grew from 1.7 to 2.7 GiB over the run: INT8 (a ~5 GB footprint on an 8 GB machine) is the most exposed, e.g. its
+1024-token prefill at 185 vs 267 tok/s between passes.
+
+**Single stream: MLX-LM leads (45 tok/s, ~43 corrected for its timing), then llama.cpp Q4_0 (40–42) and Q4_K_M
+(35–38); ours is last (30).** The effective bandwidth (weights x tok/s) is ~82–84 GB/s for MLX-LM, ~83 for Q4_0, ~78
+for Q4_K_M and ~70 for ours: we read the most bytes (2.34 GB; the 262K-row tied head at INT8 with its scales is 0.57 GB
+of it) and read them less efficiently (the per-step dispatch overhead discussed above). At our effective rate MLX-LM's
+1.88 GB would give ~37 tok/s, so bytes explain about half of the gap. Against MLX-LM's default the extra bytes buy
+quality (its KL is 1.9x ours), but llama.cpp's Q4_K_M gets 0.64x our KL from 0.20 GB fewer (`aya-4bit.md`): our
+bytes are not spent well.
+
+**Batched decode: llama.cpp Q4_0 leads at every batch size.** It gains 1.7–1.85x by batch 4 (40–42 → 74) and then
+plateaus (70–74 at batch 8); Q4_K_M gains 1.7x (36–38 → 63). Ours INT4 gains nothing at batch 2 (0.99–1.03x: the step
+goes from 33 to 66–67 ms) and then reaches 63–65 at batch 8 (2.1–2.2x); INT8 goes 20–23 → 67–69 (2.9–3.4x) and is
+again ahead of INT4 at batch 8; MLX-LM stays nearly flat (45 → 49–50). At batch 8 Q4_0 leads, ours INT8 is close
+behind (67–69 vs 70–74) and ours INT4 ties Q4_K_M (63–65 vs 63). On Qwen3.5 llama.cpp gained 1.2x with Q4_1 and 1.7x
+with Q8_0, so only the Q4_1 contrast is clear; and MLX-LM is flat on both models, which the DeltaNet guess in the
+Qwen3.5 section does not explain. Neither was investigated.
+
+**Prefill: llama.cpp leads at every length here** (Q4_0 388–390 vs ours 254–264 at 256 tokens, 378–379 vs 266–279 at
+1024), unlike Qwen3.5 where the three engines were level at 1024. Ours and MLX-LM are level at 256 and 1024 tokens
+(254–279); at 100 tokens MLX-LM is ~7% ahead (188–191 vs 172–179). Tiny Aya's FFN is wider than Qwen3.5-2B's (11008
+vs 6144; the head is not involved, prefill computes only the last position's logits); our path expands each quantized
+matrix to fp32 and runs MPS's fp32 GEMM, which item 1 of "What would close the remaining gaps" above would replace.
+The split of our prefill time was not profiled on Tiny Aya.
+
+For scale only (a different device and runtime): Cohere's report gives Q4_K_M at 446 tok/s prefill and 32.4 tok/s
+decode on an iPhone 17 Pro for 100 tokens in and 100 out (Tiny Aya report §6, Fig. 13); llama.cpp's Q4_K_M on this
+fanless M2 does 265–269 tok/s prefill on 100 tokens and 36–38 tok/s decode (tg100, from an empty context).

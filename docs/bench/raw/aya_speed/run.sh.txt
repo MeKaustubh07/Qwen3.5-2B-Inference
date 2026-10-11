@@ -1,0 +1,20 @@
+#!/bin/zsh
+# Clean M7 speed run: one engine at a time, 90 s cool-down between engines, two passes in opposite order.
+cd "$(git rev-parse --show-toplevel)"   # the repo root
+M=${0:A:h}; G=models/tiny-aya-global-gguf; X=~/workspace2/mlx-models/tiny-aya-global-4bit; PY=scripts/.venv/bin/python
+MLXPY=~/workspace2/mlx-venv/bin/python; export HF_HUB_OFFLINE=1
+ours()  { $PY scripts/bench.py --model tiny-aya-global --backend metal-$1 --weights models/tiny-aya-global/model.$1.qt \
+            --prompt-lens 16,100,256,1024 --new 32 --batch 1,2,4,8 --out $M/ours_$1_$2.md
+          $PY scripts/bench.py --model tiny-aya-global --backend metal-$1 --weights models/tiny-aya-global/model.$1.qt \
+            --prompt-lens 100 --new 100 --out $M/ours_$1_100x100_$2.md; }
+llama() { llama-bench -m $G/tiny-aya-global-$1.gguf -p 100,256,1024 -n 32,100 -ngl 99 -r 5 -o md > $M/llamacpp_bench_$1_$2.md 2>/dev/null
+          llama-batched-bench -m $G/tiny-aya-global-$1.gguf -c 2048 -npp 16 -ntg 32 -npl 1,2,4,8 -ngl 99 > $M/llamacpp_batched_$1_$2.txt 2>&1; }
+mlx()   { for b in 1 2 4 8; do $MLXPY -m mlx_lm benchmark --model $X -p 16 -g 32 -b $b -n 5 > $M/mlx_b${b}_$1.txt 2>&1; done
+          for p in 256 1024; do $MLXPY -m mlx_lm benchmark --model $X -p $p -g 32 -b 1 -n 5 > $M/mlx_p${p}_$1.txt 2>&1; done
+          $MLXPY -m mlx_lm benchmark --model $X -p 100 -g 100 -b 1 -n 5 > $M/mlx_100x100_$1.txt 2>&1; }
+cool()  { echo "$(date +%T) cool-down"; sleep 90; }
+step()  { echo "$(date +%T) start $*"; "$@"; echo "$(date +%T) done $*"; cool; }
+echo "swap before: $(sysctl -n vm.swapusage)"
+step ours int4 A; step llama q4_k_m A; step mlx A; step ours int8 A; step llama q4_0 A
+step llama q4_0 B; step ours int8 B; step mlx B; step llama q4_k_m B; step ours int4 B
+echo "swap after: $(sysctl -n vm.swapusage)"; echo "$(date +%T) ALL DONE"

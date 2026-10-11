@@ -1,0 +1,8 @@
+Running warmup..
+Timing with prompt_tokens=16, generation_tokens=32, batch_size=8.
+Trial 1:  prompt_tps=242.764, generation_tps=49.543, peak_memory=2.225, total_time=5.664
+Trial 2:  prompt_tps=241.434, generation_tps=49.534, peak_memory=2.225, total_time=5.667
+Trial 3:  prompt_tps=240.062, generation_tps=47.892, peak_memory=2.225, total_time=5.864
+Trial 4:  prompt_tps=234.162, generation_tps=47.668, peak_memory=2.225, total_time=5.895
+Trial 5:  prompt_tps=228.485, generation_tps=49.506, peak_memory=2.225, total_time=5.700
+Averages: prompt_tps=237.382, generation_tps=48.828, peak_memory=2.225
