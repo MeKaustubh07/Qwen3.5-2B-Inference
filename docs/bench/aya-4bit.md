@@ -98,6 +98,29 @@ Tiny Aya is the more economical tokenizer on Hindi (Qwen3.5 needs 1.29x the toke
 languages, Arabic and Japanese; Qwen3.5 is more economical on Chinese. The Tiny Aya report's tokenizer comparison (§2.1,
 Fig. 3) shows a far larger Devanagari gap against Qwen3, whose 152K vocabulary is older than Qwen3.5's 248K.
 
+## Perplexity across tokenizers
+
+Per-token perplexity does not compare across models with different tokenizers: a model that cuts text into bigger
+tokens makes fewer, harder predictions. Bits per character, log2(perplexity) x tokens per character, does
+(`lang_kl.py bpc`: each model's own unquantized reference on the scored positions of the same windows; Tiny Aya fp32,
+Qwen3.5-2B HF bf16).
+
+| language | Qwen3.5-2B perplexity | tokens/char | bits/char | Tiny Aya perplexity | tokens/char | bits/char |
+|---|---:|---:|---:|---:|---:|---:|
+| en | 14.79 | 0.238 | 0.927 | 21.57 | 0.235 | 1.042 |
+| fr | 10.03 | 0.301 | 1.000 | 14.34 | 0.287 | 1.101 |
+| de | 16.34 | 0.265 | 1.068 | 25.24 | 0.255 | 1.187 |
+| es | 22.01 | 0.290 | 1.294 | 32.50 | 0.284 | 1.426 |
+| hi | 9.27 | 0.551 | 1.771 | 20.10 | 0.403 | 1.744 |
+| ar | 30.46 | 0.358 | 1.764 | 63.71 | 0.318 | 1.908 |
+| zh | 40.34 | 0.882 | 4.707 | 95.84 | 0.911 | 5.995 |
+| ja | 40.24 | 0.687 | 3.664 | 113.51 | 0.645 | 4.402 |
+
+On Hindi, Qwen3.5-2B's perplexity is less than half Tiny Aya's (9.27 vs 20.10), yet per character the two are level
+(1.771 vs 1.744 bits): Tiny Aya spends 27% fewer tokens on the same text. In the other seven languages Qwen3.5-2B needs
+7.5-21.5% fewer bits per character. These are famous public-domain works, so the numbers measure familiarity with
+those texts more than quality.
+
 ## Reproduce
 
 ```bash
@@ -109,6 +132,7 @@ MLX_PY scripts/lang_kl.py mlx models/tiny-aya-global REF_AYA mlx_q4km.json --rec
 scripts/.venv/bin/python scripts/lang_kl.py ref qwen REF_QWEN           # ~8.5 min CPU (HF bf16)
 scripts/.venv/bin/python scripts/lang_kl.py table RESULTS_DIR
 scripts/.venv/bin/python scripts/lang_kl.py tpc                # tokens per 1,000 characters, both tokenizers
+scripts/.venv/bin/python scripts/lang_kl.py bpc docs/bench/raw/aya_lang_kl   # bits per character
 ```
 
 Limitations: 510 scored positions per language (s.e. 0.002-0.006 on each mean); one work per language; KL against a

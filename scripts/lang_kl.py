@@ -11,6 +11,8 @@ usage: lang_kl.py ref aya|qwen OUT_DIR                     reference (Tiny Aya f
        lang_kl.py table RESULTS_DIR                       a markdown table of every result in RESULTS_DIR
        lang_kl.py tpc [N_CHARS]                           tokens per 1,000 characters, Qwen3.5 vs Tiny Aya, on the first
                                                           N_CHARS (20,000) of each language's text
+       lang_kl.py bpc RESULTS_DIR                         bits per character of each model's own reference on the scored
+                                                          positions (perplexity does not compare across tokenizers)
 
 Text: two 512-token windows per language (8 languages) cut from the public-domain works of scripts/long_texts.py at 25%
 and 60% of each work, past its famous opening; Tiny Aya's windows start with BOS, Qwen3.5's have none. Scored: positions
@@ -287,6 +289,30 @@ def tpc(n_chars: int) -> None:
         print(f"| {lang} | {len(text):,} | {q:.1f} | {a:.1f} | {q / a:.2f}x |")
 
 
+def bpc(results: str) -> None:
+    """log2(reference perplexity) x tokens per character, both models, on the scored targets of each window (ids
+    257-511): reference perplexities from RESULTS_DIR's qwen_ours_int4.json / aya_ours_int4.json (ppl_base), the windows
+    rebuilt with each tokenizer as the references were."""
+    os.environ.setdefault("HF_HUB_OFFLINE", "1")
+    from tokenizers import Tokenizer
+    from transformers import AutoTokenizer
+    aya = AutoTokenizer.from_pretrained(str(ROOT / "models/tiny-aya-global"))
+    qwen = Tokenizer.from_file(str(ROOT / "models/qwen3.5-2b/tokenizer.json"))
+    sides = [("Qwen3.5-2B", "qwen_ours_int4.json", windows(lambda t: qwen.encode(t).ids, None), qwen.decode),
+             ("Tiny Aya", "aya_ours_int4.json", windows(lambda t: aya(t, add_special_tokens=False)["input_ids"],
+                                                         aya.bos_token_id), aya.decode)]
+    print("| language | " + " | ".join(f"{n} perplexity | {n} tokens/char | {n} bits/char" for n, *_ in sides) +
+          " |\n|---|" + "---:|" * 6)
+    for lang in LANGS:
+        cells = []
+        for _, f, W, decode in sides:
+            ppl = json.load(open(Path(results) / f))[lang]["ppl_base"]
+            ids = [w["ids"][N_CTX // 2 + 1:] for w in W if w["lang"] == lang]
+            tpc_ = sum(map(len, ids)) / sum(len(decode(i)) for i in ids)
+            cells += [f"{ppl:.2f}", f"{tpc_:.3f}", f"{np.log2(ppl) * tpc_:.3f}"]
+        print(f"| {lang} | " + " | ".join(cells) + " |")
+
+
 def main() -> None:
     a = sys.argv[1:]
     opt = lambda flag: a[a.index(flag) + 1] if flag in a else None
@@ -303,6 +329,8 @@ def main() -> None:
         llama(*a[1:4])
     elif a[0] == "table":
         table(a[1])
+    elif a[0] == "bpc":
+        bpc(a[1])
     elif a[0] == "tpc":
         tpc(int(a[1]) if len(a) > 1 else 20000)
     else:
