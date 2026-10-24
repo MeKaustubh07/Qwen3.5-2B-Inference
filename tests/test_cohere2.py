@@ -130,14 +130,13 @@ with tempfile.TemporaryDirectory() as tmp:
 
         def tensor_names(self):
             return model.weights.tensor_names()
-    rows, cohere2_module.HEAD_ROWS = cohere2_module.HEAD_ROWS, 100
     streamed, normal = Cohere2Model(model.config, Bf16(), stream=True), Cohere2Model(model.config, Bf16())
+    streamed.head_rows = 100
     widened, prepare = [], streamed.b.prepare
     streamed.b.prepare = lambda w, name=None: (widened.append(tuple(w.shape)), prepare(w, name))[1]
     s_state, n_state = streamed.new_state(64), normal.new_state(64)
     a = torch.cat([streamed.forward(prompt, state=s_state), streamed.decode_batch([7], [s_state])])
     b = torch.cat([normal.forward(prompt, state=n_state), normal.decode_batch([7], [n_state])])
-    cohere2_module.HEAD_ROWS = rows
     kept = [k for k, v in streamed._cache.items() if v.dim() > 1]
     table_parts = sorted({r for r, _ in widened if r <= 100})
     check(f"stream=True on bf16 weights: the same logits ({rel(a, b):.1e}), no widened weight kept, and the 512-row "

@@ -10,3 +10,4 @@ tests/golden_qwen35_2b/
 tests/golden_tokens_aya.json
 tests/golden_aya/
 tests/golden_aya_long/
+tests/golden_tokens_sarvam.json

@@ -3,6 +3,7 @@
 Keys and values of past tokens never change, so each layer stores them once and every later
 step reads them back instead of recomputing the whole prefix (O(n^3) total work -> O(n^2)).
 """
+import array
 import math
 
 import torch
@@ -240,20 +241,23 @@ class GroupedKVPool:
         the unit each new token goes to and each sequence's table by absolute block (a sliding group's entries before
         the window point at pad_block and are never read); offsets and lengths are shared. Device tensors:
         blocks [groups, B], offsets [B], tables [groups, B, max_nb], lens [B]."""
-        bs, dev, W = self.block_size, self.k.device, self.window
-        width = max(-(-(p + 1) // bs) for p in starts)
+        bs, W = self.block_size, self.window
+        ends = [p // bs + 1 for p in starts]
+        width = max(ends)
         blocks = [[s.unit(g, p // bs, write=True) for s, p in zip(seqs, starts)] for g in range(self.n_groups)]
-        tables = []
+        # filled by slices, not entry by entry: with Gemma 3's 34 one-layer groups a batch-8 step at 8K took 8.3 ms
+        # that way (now 1.2), all of it with the GPU idle
+        tables, pads = array.array("i"), array.array("i", [self.pad_block]) * width
         for g, sl in enumerate(self.sliding):
-            rows = []
-            for s, p in zip(seqs, starts):
+            for s, p, nb in zip(seqs, starts, ends):
                 first = max(0, p + 1 - W) // bs if sl else 0
-                row = [self.pad_block] * first + [s.unit(g, b) for b in range(first, -(-(p + 1) // bs))]
-                rows.append(row + [self.pad_block] * (width - len(row)))
-            tables.append(rows)
-        out = (torch.tensor(blocks), torch.tensor([p % bs for p in starts]), torch.tensor(tables, dtype=torch.int32),
+                tables += pads[:first]
+                tables.fromlist(s.units(g, first, nb))
+                tables += pads[:width - nb]
+        out = (torch.tensor(blocks), torch.tensor([p % bs for p in starts]),
+               torch.frombuffer(tables, dtype=torch.int32).view(self.n_groups, len(seqs), width),
                torch.tensor([p + 1 for p in starts], dtype=torch.int32))
-        return tuple(to_device(t, dev) for t in out)
+        return tuple(to_device(t, self.k.device) for t in out)
 
     def write_batch(self, slot: int, blocks: torch.Tensor, offsets: torch.Tensor, k: torch.Tensor, v: torch.Tensor):
         """k, v: [B, kv_heads, head_dim], one new token per sequence, for the layer at `slot` of one group."""
@@ -327,6 +331,21 @@ class WindowedSequence:
             raise RuntimeError(f"block {b} of group {g} is no longer in the ring (slot {i} holds {self.tags[g][i]})")
         return self.tables[g][i]
 
+    def units(self, g: int, b0: int, b1: int) -> list[int]:
+        """[unit(g, b) for b in range(b0, b1)], by list slices: a sliding group's blocks sit in consecutive ring slots
+        from b0 % R. Where a slice does not hold exactly those blocks, unit raises for the first it cannot read."""
+        table = self.tables[g]
+        if not self.pool.sliding[g]:
+            out = table[b0:b1]
+            ok = len(out) == b1 - b0
+        else:
+            i = b0 % self.pool.ring
+            j = i + b1 - b0
+            wrap = max(0, j - self.pool.ring)
+            out = table[i:j] + table[:wrap]
+            ok = self.tags[g][i:j] + self.tags[g][:wrap] == list(range(b0, b1))
+        return out if ok else [self.unit(g, b) for b in range(b0, b1)]
+
     def write(self, layer: int, start: int, k: torch.Tensor, v: torch.Tensor) -> None:
         end = start + k.shape[0]
         self.reserve(end)
@@ -342,7 +361,7 @@ class WindowedSequence:
         g, slot = self.pool.layer_map[layer]
         bs = self.pool.block_size
         b0, nb = lo // bs, -(-end // bs)
-        units = torch.tensor([self.unit(g, b) for b in range(b0, nb)], device=self.pool.k.device)
+        units = torch.tensor(self.units(g, b0, nb), device=self.pool.k.device)
         rows = slice(lo - b0 * bs, end - b0 * bs)
         return self.pool.k[slot, units].flatten(0, 1)[rows], self.pool.v[slot, units].flatten(0, 1)[rows]
 

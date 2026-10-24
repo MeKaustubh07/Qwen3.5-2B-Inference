@@ -207,9 +207,11 @@ if torch.backends.mps.is_available():                  # what load_engine hands 
         int8, int4 = (load_engine("tiny-aya-global", b) for b in ("metal-int8", "metal-int4"))
     finally:
         engine_module.FAMILIES["cohere2"] = real
-    others = [n for n, s in MODELS.items() if n != "tiny-aya-global" and "kv_dtype" in s]
-    check(f"registry: Tiny Aya's KV cache is bf16 (load_engine passes {passed}); the other models keep fp32 "
-          f"(no kv_dtype: {others == []})", passed == {"kv_dtype": torch.bfloat16} and others == [])
+    kv = {n: s.get("model_kwargs", {}).get("kv_dtype", torch.float32) for n, s in MODELS.items()}
+    bf16 = [n for n, d in kv.items() if d == torch.bfloat16]
+    check(f"registry: Tiny Aya's KV cache is bf16 (load_engine passes {passed}); bf16 KV for {bf16} only, every "
+          "other model keeps fp32", passed == {"kv_dtype": torch.bfloat16} and kv == {
+              n: torch.bfloat16 if n in ("tiny-aya-global", "sarvam-translate") else torch.float32 for n in MODELS})
     check(f"registry: INT8 serves at most {int8.max_model_len} tokens from {int8.kv_blocks} blocks (at 8K it held 5.48 "
           f"GiB, over Metal's 5.33 on 8 GB), INT4 {int4.max_model_len} from {int4.kv_blocks}",
           (int8.max_model_len, int4.max_model_len, int8.kv_blocks, int4.kv_blocks) == (4096, 8192, 512, 768))

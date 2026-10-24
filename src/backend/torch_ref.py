@@ -31,19 +31,29 @@ class TorchBackend:
     def layer_norm(self, x, w, eps):
         return ops.layer_norm(x, w, eps)
 
-    def rope(self, x, positions, theta):
-        return ops.rope(x, positions, theta)
+    def rope(self, x, positions, theta, factor=1.0):
+        return ops.rope(x, positions, theta, factor)
 
     def attention(self, q, k, v, causal=True, window=None):
         return ops.attention(q, k, v, causal, window)
 
-    def silu_mul(self, gate, up):
-        return ops.silu_mul(gate, up)
+    def silu_mul(self, gate_up):
+        F = gate_up.shape[-1] // 2
+        return ops.silu_mul(gate_up[..., :F], gate_up[..., F:])
+
+    def gelu_tanh_mul(self, gate_up):
+        F = gate_up.shape[-1] // 2
+        return ops.gelu_tanh_mul(gate_up[..., :F], gate_up[..., F:])
 
     def swiglu(self, x, w_gate_up):
-        y = self.linear(x, w_gate_up)
-        F = w_gate_up.shape[0] // 2
-        return self.silu_mul(y[:, :F], y[:, F:])
+        return self._glu(x, w_gate_up, self.silu_mul)
+
+    def geglu(self, x, w_gate_up):
+        return self._glu(x, w_gate_up, self.gelu_tanh_mul)
+
+    def _glu(self, x, w_gate_up, act):
+        """act(x @ gate.T) * (x @ up.T) for w_gate_up = [gate; up]: one linear over both, then the elementwise op."""
+        return act(self.linear(x, w_gate_up))
 
     # ---- Qwen3.5 (Gated DeltaNet) ops: backend protocol v2
     def causal_conv1d(self, x, tail, w):

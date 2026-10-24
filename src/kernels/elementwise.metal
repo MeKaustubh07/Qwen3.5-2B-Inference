@@ -1,13 +1,27 @@
 #include <metal_stdlib>
 using namespace metal;
 
-// SwiGLU core: out[i] = silu(gate[i]) * up[i]. One thread per element.
-kernel void silu_mul(device float* out        [[buffer(0)]],
-                     device const float* gate [[buffer(1)]],
-                     device const float* up   [[buffer(2)]],
-                     constant uint& n         [[buffer(3)]],
+float silu(float g);                                  // defined in matvec.metal
+float gelu_tanh(float g);
+
+// GLU cores over the fused projection, rows of 2F = [gate | up]: out[r, c] = act(gate_up[r, c]) * gate_up[r, F + c].
+// One thread per output; output i is row i / F, so its gate sits at i + (i / F) * F.
+kernel void silu_mul(device float* out           [[buffer(0)]],
+                     device const float* gate_up [[buffer(1)]],
+                     constant uint& F            [[buffer(2)]],
+                     constant uint& n            [[buffer(3)]],
                      uint i [[thread_position_in_grid]]) {
     if (i >= n) return;
-    float g = gate[i];
-    out[i] = g / (1.0f + precise::exp(-g)) * up[i];
+    uint g = i + i / F * F;
+    out[i] = silu(gate_up[g]) * gate_up[g + F];
+}
+
+kernel void gelu_tanh_mul(device float* out           [[buffer(0)]],
+                          device const float* gate_up [[buffer(1)]],
+                          constant uint& F            [[buffer(2)]],
+                          constant uint& n            [[buffer(3)]],
+                          uint i [[thread_position_in_grid]]) {
+    if (i >= n) return;
+    uint g = i + i / F * F;
+    out[i] = gelu_tanh(gate_up[g]) * gate_up[g + F];
 }

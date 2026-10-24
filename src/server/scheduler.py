@@ -382,10 +382,10 @@ class Scheduler:
         self.metrics.inc("generation_tokens_total")
         # Incremental detokenization: decode only a short window instead of the whole output every token.
         # prefix = text of the last emitted tokens, full = that plus the new ones; the difference is the new text.
-        # Held back while it ends in U+FFFD (a multi-byte character split across tokens).
+        # Held back until no later token can change it (a character split across tokens, a run of byte tokens).
         prefix = self.tok.decode(req.generated[req.prefix_offset:req.read_offset])
         full = self.tok.decode(req.generated[req.prefix_offset:])
-        if len(full) > len(prefix) and not full.endswith("\ufffd"):
+        if len(full) > len(prefix) and self.tok.is_final(full, token):
             piece = full[len(prefix):]
             req.out.put(("token", piece))
             req.emitted += piece

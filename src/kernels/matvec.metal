@@ -75,8 +75,25 @@ kernel void matvec_bf16_rows(device float* y [[buffer(0)]], device const bfloat4
     ROWS_EPILOGUE
 }
 
-// Fused SwiGLU for decode: Wgu = [gate; up] stacked, shape [2F, K]. Output row i reads gate row i and
-// up row F+i in the same pass and writes silu(gate) * up directly (one dispatch instead of three).
+// GLU activations, in the operation order of torch's CPU kernels (silu, gelu(approximate="tanh")) so the fp32
+// results track the reference. Defined here because the native runtime compiles this file alone; elementwise.metal
+// declares them (all files compile as one source).
+float silu(float g) { return g / (1.0f + precise::exp(-g)); }
+float gelu_tanh(float g) {
+    return 0.5f * g * (1.0f + precise::tanh(0.7978845608028654f * (g + 0.044715f * (g * g * g))));
+}
+
+// Fused GLU for decode: Wgu = [gate; up] stacked, shape [2F, K]. Output row i reads gate row i and up row F+i in
+// the same pass and writes act(gate) * up directly (one dispatch instead of three). K % 4 == 0.
+inline float2 glu_dots(device const bfloat* Wgu, device const float* x, uint K, uint F, uint row, uint lane) {
+    device const bfloat4* g4 = (device const bfloat4*)(Wgu + (ulong)row * K);
+    device const bfloat4* u4 = (device const bfloat4*)(Wgu + (ulong)(row + F) * K);
+    device const float4* x4 = (device const float4*)x;
+    float g = 0.0f, u = 0.0f;
+    for (uint j = lane; j < K / 4; j += 32) { float4 xv = x4[j]; g += dot(float4(g4[j]), xv); u += dot(float4(u4[j]), xv); }
+    return float2(simd_sum(g), simd_sum(u));
+}
+
 kernel void matvec_swiglu_bf16(device float* out        [[buffer(0)]],
                                device const bfloat* Wgu [[buffer(1)]],
                                device const float* x    [[buffer(2)]],
@@ -86,11 +103,19 @@ kernel void matvec_swiglu_bf16(device float* out        [[buffer(0)]],
                                uint lane [[thread_index_in_simdgroup]]) {
     uint row = gid / 32;
     if (row >= F) return;
-    device const bfloat4* g4 = (device const bfloat4*)(Wgu + (ulong)row * K);
-    device const bfloat4* u4 = (device const bfloat4*)(Wgu + (ulong)(row + F) * K);
-    device const float4* x4 = (device const float4*)x;
-    float g = 0.0f, u = 0.0f;
-    for (uint j = lane; j < K / 4; j += 32) { float4 xv = x4[j]; g += dot(float4(g4[j]), xv); u += dot(float4(u4[j]), xv); }
-    g = simd_sum(g); u = simd_sum(u);
-    if (lane == 0) out[row] = g / (1.0f + precise::exp(-g)) * u;
+    float2 gu = glu_dots(Wgu, x, K, F, row, lane);
+    if (lane == 0) out[row] = silu(gu.x) * gu.y;
+}
+
+kernel void matvec_geglu_bf16(device float* out        [[buffer(0)]],
+                              device const bfloat* Wgu [[buffer(1)]],
+                              device const float* x    [[buffer(2)]],
+                              constant uint& K         [[buffer(3)]],
+                              constant uint& F         [[buffer(4)]],
+                              uint gid  [[thread_position_in_grid]],
+                              uint lane [[thread_index_in_simdgroup]]) {
+    uint row = gid / 32;
+    if (row >= F) return;
+    float2 gu = glu_dots(Wgu, x, K, F, row, lane);
+    if (lane == 0) out[row] = gelu_tanh(gu.x) * gu.y;
 }

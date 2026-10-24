@@ -1,12 +1,21 @@
 """Weeks 9-10: every Metal kernel vs the torch reference op at Qwen3.5-0.8B shapes (and Tiny Aya's: LayerNorm,
-16/4 x 128 attention), micro-benchmarks, weight locking."""
+16/4 x 128 attention; Gemma 3's: GeGLU, RoPE with linear scaling, both against transformers), micro-benchmarks,
+weight locking."""
+import os
 import sys
 import time
+
+os.environ.setdefault("HF_HUB_OFFLINE", "1")
 import torch
+from transformers import Gemma3TextConfig
+from transformers.activations import ACT2FN
+from transformers.models.gemma3.modeling_gemma3 import Gemma3MLP, Gemma3RotaryEmbedding, apply_rotary_pos_emb
 
 sys.path.insert(0, "src")
 import ops
 from backend.metal import MetalBackend
+from backend.torch_ref import TorchBackend
+from quant import quantize
 
 if not torch.backends.mps.is_available():
     print("SKIP: no MPS device"); sys.exit(0)
@@ -25,9 +34,11 @@ def bench(fn, iters=200):
     for _ in range(iters): fn()
     torch.mps.synchronize(); return (time.perf_counter() - t0) / iters * 1e6   # microseconds
 
-# silu_mul (the MLP width of Qwen3.5-0.8B)
-g, u = torch.randn(1, 3584, device=dev), torch.randn(1, 3584, device=dev)
-check(f"silu_mul max|diff|={maxdiff(mb.silu_mul(g, u), ops.silu_mul(g, u)):.1e}", maxdiff(mb.silu_mul(g, u), ops.silu_mul(g, u)) < 1e-5)
+# silu_mul over [gate | up] rows (the MLP width of Qwen3.5-0.8B): a decode row, a batch, a prefill block
+for M in (1, 5, 64):
+    gu = torch.randn(M, 2 * 3584, device=dev)
+    d = maxdiff(mb.silu_mul(gu), ops.silu_mul(gu[:, :3584], gu[:, 3584:]))
+    check(f"silu_mul M={M} max|diff|={d:.1e}", d < 1e-5)
 
 # rms_norm with fp32 weights (Qwen3.5 stores 1 + w in fp32): hidden rows (decode row and prefill blocks) and the
 # per-head q/k norms; plus one row through the bf16-weight kernel
@@ -60,6 +71,40 @@ for H, d, theta, pos in ((10, 64, 1e7, torch.arange(5)), (10, 64, 1e7, torch.ten
     rel = maxdiff(ours, ref) / ref.abs().max().item()
     check(f"rope {H} heads d={d} theta {theta:g}, positions up to {int(pos.max())}: relative max|diff| vs the CPU "
           f"reference {rel:.1e}", rel < 1e-6)
+
+# rope with linear scaling (Gemma 3): transformers' own Gemma3RotaryEmbedding, built from a tiny Gemma3TextConfig that
+# carries the real model's two tables (sliding: theta 1e4; full: theta 1e6, every frequency / 8), and its
+# apply_rotary_pos_emb, at every position 0..8191, vs ops.rope (CPU) and the Metal kernel. The Metal backend caches
+# frequencies per (theta, d, factor): the unscaled table at theta 1e6 is cached first, so a key without the factor
+# would hand the full-attention call the wrong one
+gcfg = Gemma3TextConfig(vocab_size=128, hidden_size=256, intermediate_size=1024, num_hidden_layers=6,
+                        num_attention_heads=8, num_key_value_heads=4, head_dim=256,
+                        rope_parameters={"sliding_attention": {"rope_type": "default", "rope_theta": 10_000.0},
+                                         "full_attention": {"rope_type": "linear", "factor": 8.0,
+                                                            "rope_theta": 1_000_000.0}})
+rot = Gemma3RotaryEmbedding(gcfg)
+pos = torch.arange(8192)
+x = torch.randn(len(pos), 2, 256) * 50
+xd, pd = x.to(dev), pos.to(dev)
+unscaled = mb.rope(xd, pd, 1e6)
+for layer_type, theta, factor in (("sliding_attention", 1e4, 1.0), ("full_attention", 1e6, 8.0)):
+    same_table = torch.equal(ops.rope_inv_freq(theta, 256, factor), getattr(rot, f"{layer_type}_inv_freq"))
+    cos, sin = rot(x, pos[None], layer_type)
+    ref = apply_rotary_pos_emb(x.transpose(0, 1)[None], x.transpose(0, 1)[None], cos, sin)[0][0].transpose(0, 1)
+    rel_cpu = maxdiff(ops.rope(x, pos, theta, factor), ref) / ref.abs().max().item()
+    rel_metal = maxdiff(mb.rope(xd, pd, theta, factor), ref) / ref.abs().max().item()
+    check(f"rope {layer_type} (theta {theta:g}, factor {factor:g}) vs transformers' Gemma3RotaryEmbedding + "
+          f"apply_rotary_pos_emb, d=256, positions 0..8191: frequencies bit-identical {same_table}, attention scaling "
+          f"{getattr(rot, f'{layer_type}_attention_scaling')}; relative max|diff| CPU {rel_cpu:.1e}, Metal "
+          f"{rel_metal:.1e}", same_table and getattr(rot, f"{layer_type}_attention_scaling") == 1.0
+          and rel_cpu < 1e-6 and rel_metal < 1e-6)
+legacy = all(torch.equal(ops.rope_inv_freq(theta, d), 1.0 / (theta ** (torch.arange(0, d // 2, dtype=torch.float32)
+                                                                       / (d // 2))))
+             for theta in (1e4, 5e4, 1e6, 1e7) for d in (64, 128, 256))
+check(f"rope factor 1.0 (the default) leaves results bit-identical: tables == the unscaled formula {legacy}, Metal "
+      f"theta 1e6 before and after a factor-8 call identical {torch.equal(unscaled, mb.rope(xd, pd, 1e6, 1.0))}",
+      legacy and torch.equal(unscaled, mb.rope(xd, pd, 1e6, 1.0)))
+del x, xd, cos, sin, ref, unscaled
 
 # matvec: every projection shape in Qwen3.5-0.8B (qkvg, o_proj/out_proj, DeltaNet in_proj, gate_up, down) plus the
 # 248,320-row output head, and one synthetic 896x896 +bias row (the bias path, and K % 256 = 128: every Qwen3.5 K is
@@ -100,8 +145,59 @@ check(f"matvec + fused residual: rel diff {maxdiff(mb.linear(x, W, residual=r), 
 Wgu = (torch.randn(2 * 3584, 1024) * 0.05).to(torch.bfloat16).to(dev); x = torch.randn(1, 1024, device=dev)
 yg = x @ Wgu.float().T; ref = ops.silu_mul(yg[:, :3584], yg[:, 3584:])
 rel = maxdiff(mb.swiglu(x, Wgu), ref) / ref.abs().max().item()
-t_fused = bench(lambda: mb.swiglu(x, Wgu)); t_split = bench(lambda: mb.silu_mul(mb.linear(x, Wgu[:3584]), mb.linear(x, Wgu[3584:])))
-check(f"fused swiglu: rel diff {rel:.1e} | fused {t_fused:.0f} us vs 3 separate kernels {t_split:.0f} us", rel < 1e-3)
+t_fused = bench(lambda: mb.swiglu(x, Wgu)); t_split = bench(lambda: mb.silu_mul(mb.linear(x, Wgu)))
+check(f"fused swiglu: rel diff {rel:.1e} | fused {t_fused:.0f} us vs linear + silu_mul {t_split:.0f} us", rel < 1e-3)
+
+# GeGLU (Gemma 3's MLP): gelu_tanh(gate) * up vs transformers' "gelu_pytorch_tanh" (torch's gelu(approximate="tanh")),
+# errors in units of |up| * max(1, |gate|). Torch's own kernel is not one function of its input: the SIMD body of each
+# thread's chunk computes gate + 0.044715 gate^3 in two roundings, the scalar loop at the chunk's end in one (FMA), up to
+# 1.2e-7 apart. ops.gelu_tanh_mul is the SIMD body's operations, so on the CPU it may differ only in those tails. The
+# Metal kernel's tanh is not torch's (near gate = -5, 1 + tanh cancels and shows it); where tanh saturates
+# (|gate| >= 10, also where gate^3 overflows) it must be exact
+edge = torch.tensor([0.0, -0.0, 1e-30, -1e-30, 1e-3, -1e-3, 0.5, -0.5, 1, -1, 3, -3, 5, -5, 9, -9, 10, -10, 50, -50,
+                     1e4, -1e4, 1e13, -1e13, 1e30, -1e30])
+g = torch.cat([edge, torch.linspace(-12, 12, 100001), torch.randn(1 << 20) * 3])
+u = torch.randn_like(g)
+ref = ACT2FN["gelu_pytorch_tanh"](g) * u
+unit = (u.abs() * g.abs().clamp_min(1)).clamp_min(torch.finfo(torch.float32).tiny)        # randn can give up = 0
+cpu, ours = ops.gelu_tanh_mul(g, u), mb.gelu_tanh_mul(torch.cat([g, u])[None].to(dev))[0].cpu()
+err_cpu, err = ((cpu - ref).abs() / unit).max().item(), ((ours - ref).abs() / unit).max().item()
+sat = g.abs() >= 10
+check(f"gelu_tanh_mul on {len(g)} values (edge values, -12..12, random) vs transformers: CPU identical in "
+      f"{int((cpu == ref).sum())}, max|diff| {err_cpu:.1e}; Metal max|diff| {err:.1e}, saturated values exact "
+      f"{torch.equal(ours[sat], ref[sat])}", err_cpu < 3e-7 and err < 1e-6 and torch.equal(ours[sat], ref[sat]))
+tb = TorchBackend()
+mlp = Gemma3MLP(gcfg)
+xm = torch.randn(9, gcfg.hidden_size) * 3
+with torch.no_grad():
+    want = mlp(xm)
+    got = tb.linear(tb.geglu(xm, torch.cat([mlp.gate_proj.weight, mlp.up_proj.weight])), mlp.down_proj.weight)
+check(f"TorchBackend (CPU fp32) geglu + down == transformers' Gemma3MLP, T=9: max|diff| {maxdiff(got, want):.1e}",
+      maxdiff(got, want) <= 1e-6 * want.abs().max().item())
+del g, u, unit, ref, cpu, ours, mlp
+
+# geglu at Sarvam-Translate's shape (K 2560, F 10240) on every path, vs fp32 on the CPU (bf16 or dequantized weights):
+# the fused decode kernel (T=1), batched matvec kernels (2..8), groups of them (20), prefill GEMM (512); INT8 / INT4
+F, K = 10240, 2560
+Wgu = (torch.randn(2 * F, K) * 0.05).to(torch.bfloat16)
+xg = torch.randn(512, K)
+for scheme in ("bf16", "int8", "int4"):
+    w = Wgu.to(dev) if scheme == "bf16" else quantize(Wgu.float(), scheme)
+    y = xg @ (Wgu.float() if scheme == "bf16" else w.dequantize()).T
+    want = ops.gelu_tanh_mul(y[:, :F], y[:, F:])
+    w = w.to(dev)
+    worst = {T: maxdiff(mb.geglu(xg[:T].to(dev), w), want[:T]) / want[:T].abs().max().item()
+             for T in (1, 2, 3, 5, 8, 20, 512)}
+    timing = ""
+    if scheme == "bf16":
+        x1 = xg[:1].to(dev)
+        t_fused = bench(lambda: mb.geglu(x1, w))
+        t_split = bench(lambda: mb.gelu_tanh_mul(mb.linear(x1, w)))
+        timing = (f" | decode: fused {t_fused:.0f} us ({2 * F * K * 2 / (t_fused * 1e-6) / 1e9:.0f} GB/s) vs "
+                  f"linear + gelu_tanh_mul {t_split:.0f} us")
+    check(f"geglu {scheme} {2 * F}x{K}: relative max|diff| vs fp32 reference "
+          + ", ".join(f"T={T} {e:.1e}" for T, e in worst.items()) + timing, max(worst.values()) < 1e-5)
+del Wgu, w, xg, y, want; torch.mps.empty_cache()
 
 # decode attention: 1 query, S cached positions, 8 query heads sharing 2 KV heads of 256 dims. The kernel splits its
 # value pass into 256/d groups plus a reduction: 1 group at d=256, so one d=64 case (14/2 heads) keeps 4 covered.
@@ -121,7 +217,6 @@ for S in (1, 300, 4096):
 
 # paged decode attention: 5 sequences of different lengths in one dispatch, each reading its keys/values in place
 # through a scrambled block table, vs the reference gather-then-attend (TorchBackend on MPS, fp32)
-from backend.torch_ref import TorchBackend
 rb = TorchBackend("mps", torch.float32)
 lens_l, bs = [1, 7, 16, 33, 300], 16
 perm = torch.randperm(32).tolist()

@@ -235,6 +235,10 @@ with tempfile.TemporaryDirectory() as tmp:
         @staticmethod
         def decode(toks):
             return " ".join(map(str, toks))
+
+        @staticmethod
+        def is_final(text, last_id):
+            return True
     eng = types.SimpleNamespace(model=model, tokenizer=Tok, eos_ids=set(), max_model_len=8192, name="tiny")
     sched = Scheduler(eng, Metrics(), max_batch=3, kv_blocks=14, block_size=4, prefill_chunk=3)
     prompts = [ids[:5], ids[3:22], ids[10:21], ids[:27]]

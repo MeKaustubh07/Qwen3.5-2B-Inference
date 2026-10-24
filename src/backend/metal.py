@@ -1,6 +1,6 @@
 """Metal backend: hand-written MSL kernels (src/kernels/*.metal) compiled at runtime and dispatched on the GPU.
 
-Decode (one token) runs entirely through custom kernels: matvec, RMSNorm, RoPE, attention, SwiGLU.
+Decode (one token) runs entirely through custom kernels: matvec, RMSNorm, RoPE, attention, SwiGLU / GeGLU.
 Prefill (many tokens) keeps PyTorch's tuned GEMM and attention for the matrix-matrix work.
 """
 from pathlib import Path
@@ -38,7 +38,7 @@ class MetalBackend(TorchBackend):
         self._no_bias = torch.zeros(1, dtype=torch.bfloat16, device=self.device)
         self._no_res = torch.zeros(1, device=self.device)
         self._seq0 = torch.zeros(1, dtype=torch.int32, device=self.device)   # a standalone state = sequence 0
-        self._inv_freq: dict[tuple[float, int], torch.Tensor] = {}          # RoPE frequencies per (theta, d)
+        self._inv_freq: dict[tuple[float, int, float], torch.Tensor] = {}   # RoPE frequencies per (theta, d, factor)
 
     def prepare(self, w, name=None):
         if isinstance(w, QuantTensor):
@@ -143,17 +143,19 @@ class MetalBackend(TorchBackend):
         return y
 
     def swiglu(self, x, w_gate_up):
-        if isinstance(w_gate_up, QuantTensor):
-            y = self._qlinear(x, w_gate_up)
-            F = w_gate_up.shape[0] // 2
-            return self.silu_mul(y[:, :F], y[:, F:])
-        if x.shape[0] != 1 or w_gate_up.dtype != torch.bfloat16:
-            y = self.linear(x, w_gate_up)                  # batched kernel for small M, GEMM for prefill
-            F = w_gate_up.shape[0] // 2
-            return self.silu_mul(y[:, :F], y[:, F:])
+        return self._fused_glu(x, w_gate_up, self.silu_mul, "matvec_swiglu_bf16")
+
+    def geglu(self, x, w_gate_up):
+        return self._fused_glu(x, w_gate_up, self.gelu_tanh_mul, "matvec_geglu_bf16")
+
+    def _fused_glu(self, x, w_gate_up, act, kernel: str):
+        """One bf16 decode row: `kernel` reads the gate and up rows in one pass and applies the activation. Anything
+        else (quantized, batched kernels for small M, GEMM for prefill): linear, then the elementwise `act`."""
         F, K = w_gate_up.shape[0] // 2, w_gate_up.shape[1]
+        if isinstance(w_gate_up, QuantTensor) or x.shape[0] != 1 or w_gate_up.dtype != torch.bfloat16 or K % 4:
+            return self._glu(x, w_gate_up, act)
         out = torch.empty(1, F, device=self.device)
-        self.lib.matvec_swiglu_bf16(out, w_gate_up, x.float().contiguous(), K, F, threads=F * 32, group_size=TG)
+        getattr(self.lib, kernel)(out, w_gate_up, x.float().contiguous(), K, F, threads=F * 32, group_size=TG)
         return out
 
     def rms_norm(self, x, w, eps):
@@ -174,14 +176,14 @@ class MetalBackend(TorchBackend):
                             threads=rows * TG, group_size=TG)
         return out
 
-    def rope(self, x, positions, theta):
+    def rope(self, x, positions, theta, factor=1.0):
         x = x.float().contiguous()
         T, H, d = x.shape
         out = torch.empty_like(x)
         n = T * H * (d // 2)
-        key = (float(theta), d)
+        key = (float(theta), d, float(factor))
         if key not in self._inv_freq:                       # computed once, as ops.rope and transformers compute it
-            self._inv_freq[key] = ops.rope_inv_freq(theta, d).to(self.device)
+            self._inv_freq[key] = ops.rope_inv_freq(theta, d, factor).to(self.device)
         self.lib.rope(out, x, positions.to(device=self.device, dtype=torch.int32), self._inv_freq[key], H, d, n,
                       threads=n, group_size=min(TG, n))
         return out
@@ -222,11 +224,19 @@ class MetalBackend(TorchBackend):
             Hkv, Hq // Hkv, d, window or 0, threads=(Hq * TG, B), group_size=(TG, 1))
         return out
 
-    def silu_mul(self, gate, up):
-        gate, up = gate.float().contiguous(), up.float().contiguous()
-        out = torch.empty_like(gate)
-        n = gate.numel()
-        self.lib.silu_mul(out, gate, up, n, threads=n, group_size=min(TG, n))
+    def silu_mul(self, gate_up):
+        return self._act_mul("silu_mul", gate_up)
+
+    def gelu_tanh_mul(self, gate_up):
+        return self._act_mul("gelu_tanh_mul", gate_up)
+
+    def _act_mul(self, kernel: str, gate_up):
+        """The kernel reads both halves of each row in place: no copies of the [M, F] halves."""
+        gate_up = gate_up.float().contiguous()
+        F = gate_up.shape[-1] // 2
+        out = torch.empty(*gate_up.shape[:-1], F, device=self.device)
+        n = out.numel()
+        getattr(self.lib, kernel)(out, gate_up, F, n, threads=n, group_size=min(TG, n))
         return out
 
     def deltanet_decode(self, qkv, z, b, a, state, slot, conv_w, A_log, dt_bias, norm_w, eps, dims):

@@ -8,8 +8,9 @@ import torch
 from backend.metal import MetalBackend
 from backend.torch_ref import TorchBackend
 from chat import TemplateChat
-from config import Cohere2Config, Qwen35Config
+from config import Cohere2Config, Gemma3Config, Qwen35Config
 from models.cohere2 import Cohere2Model
+from models.gemma3 import Gemma3Model
 from models.qwen3_5 import Qwen35Model
 from quant import QtFile
 from tokenizer import Tokenizer
@@ -29,8 +30,9 @@ MODELS = {
     # Stops: <EOS_TOKEN>, <|END_OF_TURN_TOKEN|>, <|END_RESPONSE|>. Sampling: the model card's. max_model_len: its
     # config's 8192 (prompt + output), checked past the 4096-token window (tests/test_aya_long*.py). No
     # thinking mode. policy: written by scripts/calibrate_quant.py; until then INT4 warns. backends: only the
-    # quantized Metal ones fit in 8 GB (fp32 on the CPU would need 13.4 GB, bf16 on the GPU 6.7 GB). kv_dtype: its KV
-    # is 6x Qwen3.5-2B's per token (36 layers x 4 heads x 128), so it is stored in bf16 (the other models keep fp32).
+    # quantized Metal ones fit in 8 GB (fp32 on the CPU would need 13.4 GB, bf16 on the GPU 6.7 GB). model_kwargs: what
+    # the model class is built with; kv_dtype: its KV is 6x Qwen3.5-2B's per token (36 layers x 4 heads x 128), so it
+    # is stored in bf16 (Qwen3.5 keeps fp32).
     # kv_blocks: the server's pool, 768 blocks of every layer = 864 MiB of bf16 KV (two 8K sequences, rings counted);
     # with the INT4 weights 8K prompts then hold 4.45 GiB of GPU memory. per_backend: what one backend changes. INT8's
     # weights are 1.2 GB larger, and at 8K it held 5.48 GiB, over the 5.33 GiB Metal recommends on an 8 GB Mac, where
@@ -42,12 +44,24 @@ MODELS = {
     "tiny-aya-global": dict(dir="models/tiny-aya-global", family="cohere2", weights="model.safetensors.index.json",
                             eos=[3, 6, 261001], chat="template", policy="configs/quant/tiny-aya-global.json",
                             sampling=dict(temperature=0.1, top_p=0.95, top_k=50, repetition_penalty=1.0),
-                            max_model_len=8192, backends=("metal-int8", "metal-int4"), kv_dtype="bfloat16",
+                            max_model_len=8192, backends=("metal-int8", "metal-int4"),
+                            model_kwargs=dict(kv_dtype=torch.bfloat16),
                             kv_blocks=768, per_backend={"metal-int8": dict(max_model_len=4096, kv_blocks=512),
                                                          "metal-int4": dict(decide_max_len=6144)}),
+    # Sarvam-Translate (Gemma 3 4B text model; docs/sarvam-translate-plan.md). Stops: <eos>, <end_of_turn>
+    # (generation_config.json). Sampling: the card's temperature 0.01 with generation_config's top_k / top_p.
+    # max_model_len: the card's 8K (the config's 131072 is Gemma 3's). backends: quantized Metal only (the text model
+    # is 15.5 GB in fp32, 7.8 GB in bf16). model_kwargs: bf16 KV (136 KiB per token over 34 layers); the embedding
+    # scaled by sqrt(2560) rounded to bf16 (50.5), as transformers computes it with the checkpoint's bf16 weights.
+    "sarvam-translate": dict(dir="models/sarvam-translate", family="gemma3", weights="model.safetensors.index.json",
+                             eos=[1, 106], chat="template", policy="configs/quant/sarvam-translate.json",
+                             sampling=dict(temperature=0.01, top_p=0.95, top_k=64, repetition_penalty=1.0),
+                             max_model_len=8192, backends=("metal-int8", "metal-int4"),
+                             model_kwargs=dict(kv_dtype=torch.bfloat16, embed_scale_dtype=torch.bfloat16)),
 }
 FAMILIES = {"qwen3_5": (Qwen35Config, Qwen35Model),          # family -> (config class, model class)
-            "cohere2": (Cohere2Config, Cohere2Model)}
+            "cohere2": (Cohere2Config, Cohere2Model),
+            "gemma3": (Gemma3Config, Gemma3Model)}
 
 
 @dataclass
@@ -100,7 +114,7 @@ def load_engine(name: str, backend: str = "metal", weights_file: str | None = No
                          f"stop ids {spec['eos']}")
     be = make_backend(backend, str(ROOT / p) if (p := spec.get("policy")) else None)
     weights = QtFile(weights_file) if weights_file else open_weights(str(d / spec["weights"]))
-    model = model_cls(cfg, weights, be, **({"kv_dtype": getattr(torch, spec["kv_dtype"])} if "kv_dtype" in spec else {}))
+    model = model_cls(cfg, weights, be, **spec.get("model_kwargs", {}))
     caps = [c for c in (spec.get("max_model_len"), getattr(model, "max_positions", None)) if c]
     return Engine(name, model, tok, set(spec["eos"]), chat_style(spec, d), spec["sampling"],
                   min(caps) if caps else None, spec.get("thinking", False), spec.get("kv_blocks"),

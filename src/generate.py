@@ -62,7 +62,7 @@ def generate_stream(model, tokenizer, prompt_ids: list[int], params: SamplingPar
         history.append(next_id)
         new.append(next_id)
         text = tokenizer.decode(new)
-        if not text.endswith("�"):          # wait until a multi-byte character is complete
+        if tokenizer.is_final(text, next_id):
             yield text[len(emitted):]
             emitted = text
         if len(new) < max_new_tokens:
