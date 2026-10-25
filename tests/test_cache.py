@@ -1,4 +1,3 @@
-"""Week 7: hybrid cache correctness (cached == uncached), speed, byte accounting, and the GPU backends (Qwen3.5-0.8B)."""
 import gc
 import sys
 import time

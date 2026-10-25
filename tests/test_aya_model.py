@@ -1,11 +1,3 @@
-"""Tiny Aya port, M3: the real model (3.35B parameters, fp32 on the CPU, streamed one layer at a time) against the
-answer key from transformers' own decoder layers (scripts/golden_aya.py, gitignored): every layer and the logits of
-7 raw prompts (5 languages and code), 10 greedy tokens each with the logits of every decode step, and 2 chat prompts
-end to end (the engine's tokenizer and chat template, the final hidden state of every position, the logits of the last
-8, greedy). Errors are measured per row (each token's worst element over its own largest one) as well as over the whole
-tensor, because the first (BOS) token's activations are up to 50x larger than the others' and would hide their errors. All prompts go together: one packed prefill, then one batched
-decode step per token, so each weight is widened ~10 times in all. Without the gated files it prints SKIP; with
-them but without the answer key it fails and says how to make it."""
 import glob
 import os
 import sys

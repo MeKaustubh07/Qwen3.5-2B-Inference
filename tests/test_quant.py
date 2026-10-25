@@ -1,4 +1,3 @@
-"""Weeks 11-12: INT8/INT4 quantization math, kernels, .qt files, and model accuracy vs bf16."""
 import gc
 import glob
 import json

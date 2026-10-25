@@ -1,6 +1,3 @@
-"""Weeks 9-10: every Metal kernel vs the torch reference op at Qwen3.5-0.8B shapes (and Tiny Aya's: LayerNorm,
-16/4 x 128 attention; Gemma 3's: GeGLU, RoPE with linear scaling, both against transformers), micro-benchmarks,
-weight locking."""
 import os
 import sys
 import time
@@ -15,7 +12,7 @@ sys.path.insert(0, "src")
 import ops
 from backend.metal import MetalBackend
 from backend.torch_ref import TorchBackend
-from quant import quantize
+from quant import QuantTensor, quantize
 
 if not torch.backends.mps.is_available():
     print("SKIP: no MPS device"); sys.exit(0)
@@ -291,6 +288,62 @@ for kd, vd in ((torch.float16, torch.float16), (torch.bfloat16, torch.float32)):
     except TypeError:
         refused = True
     check(f"paged_attention refuses a {str(kd)[6:]} / {str(vd)[6:]} pool (TypeError)", refused)
+
+# Gemma 3 (Sarvam-Translate) decode shapes. Quantized matvecs: q/k/v 4096x2560, o_proj 2560x2048, down_proj
+# 2560x10240 in INT8 and INT4, the 262,208-row tied head in INT8 (built as random codes and scales: a bf16 copy would
+# be 1.3 GB); one row, batched rows (2, 8), groups of them (20) and the prefill GEMM (64), vs the dequantized weights
+mb8 = MetalBackend("int8")
+for N, K, schemes in ((4096, 2560, ("int8", "int4")), (2560, 2048, ("int8", "int4")), (2560, 10240, ("int8", "int4")),
+                      (262208, 2560, ("int8",))):
+    xs = torch.randn(64, K)
+    for scheme in schemes:
+        if N > 100_000:
+            w = QuantTensor("int8", torch.randint(-127, 128, (N, K), dtype=torch.int8),
+                            (torch.rand(N, K // 32) * 1e-3 + 1e-4).half(), (N, K))
+        else:
+            w = quantize(torch.randn(N, K) * 0.05, scheme)
+        want = torch.cat([xs @ w.dequantize(torch.arange(r, min(N, r + 32768))).T for r in range(0, N, 32768)], 1)
+        wd, xd = w.to(dev), xs.to(dev)
+        worst = {M: maxdiff(mb8.linear(xd[:M], wd), want[:M]) / want[:M].abs().max().item() for M in (1, 2, 8, 20, 64)}
+        check(f"{scheme} matvec {N}x{K} (Gemma 3): relative max|diff| vs the dequantized weights "
+              + ", ".join(f"M={M} {e:.1e}" for M, e in worst.items()), max(worst.values()) < 1e-5)
+        del w, wd, want
+torch.mps.empty_cache()
+
+# rms_norm with fp32 (1 + w) weights at Gemma 3's widths: hidden rows (decode, batch, prefill) and q_norm / k_norm over
+# 8 query and 4 key heads of 256
+for shape in ((1, 2560), (8, 2560), (64, 2560), (1, 8, 256), (1, 4, 256), (8, 12, 256)):
+    w = 1 + torch.randn(shape[-1], device=dev) * 0.1
+    x = torch.randn(*shape, device=dev) * 30
+    d = maxdiff(mb.rms_norm(x, w, 1e-6), ops.rms_norm(x, w, 1e-6))
+    check(f"rms_norm (fp32 1 + w) Gemma 3 shape x{list(shape)} max|diff|={d:.1e}", d < 1e-4)
+
+# decode attention at Gemma 3's shape (8 query heads sharing 4 KV heads of 256) with its 1024-token window, both KV
+# dtypes: contiguous at the window's edges and past them, and paged with every block before each window NaN
+for kvdt in (torch.float32, torch.bfloat16):
+    worst = 0.0
+    for S, W in ((1, 1024), (1023, 1024), (1024, 1024), (1025, 1024), (3000, 1024), (3000, None)):
+        q = torch.randn(1, 8, 256, device=dev)
+        k, v = (torch.randn(S, 4, 256, device=dev).to(kvdt) for _ in range(2))
+        worst = max(worst, maxdiff(mb.attention(q, k, v, window=W), ops.attention(q, k.float(), v.float(), window=W)))
+    lens_w = [1, 1024, 1025, 2051, 3000]
+    nbs_w = [-(-n // bs) for n in lens_w]
+    perm_w = torch.randperm(sum(nbs_w)).tolist()
+    tabs_w = [perm_w[sum(nbs_w[:i]):sum(nbs_w[:i + 1])] for i in range(len(lens_w))]
+    tables_w = torch.tensor([t + [0] * (max(nbs_w) - len(t)) for t in tabs_w], dtype=torch.int32, device=dev)
+    kp, vp = (torch.randn(sum(nbs_w), bs, 4, 256, device=dev).to(kvdt) for _ in range(2))
+    q = torch.randn(len(lens_w), 8, 256, device=dev)
+    lens_t = torch.tensor(lens_w, dtype=torch.int32, device=dev)
+    want = rb.paged_attention(q, kp, vp, tables_w, lens_t, bs, window=1024)
+    for t, n in zip(tabs_w, lens_w):
+        for b in t[:max(0, n - 1024) // bs]:
+            kp[b], vp[b] = float("nan"), float("nan")
+    got = mb.paged_attention(q, kp, vp, tables_w, lens_t, bs, window=1024)
+    check(f"attention_decode{'_bf16' if kvdt == torch.bfloat16 else ''} Gemma 3 shape 8/4 heads d=256, window 1024 at "
+          f"S 1-3000 (and none at 3000): max|diff| {worst:.1e}; paged, lengths {lens_w}, blocks before the window NaN: "
+          f"finite, max|diff| {maxdiff(got, want):.1e}",
+          worst < 1e-4 and bool(torch.isfinite(got).all()) and maxdiff(got, want) < 1e-4)
+del kp, vp, q, k, v; torch.mps.empty_cache()
 
 # weights locked in RAM (backend/pinning.py): mlock of the MTLBuffer pages behind MPS tensors. The kernel's user wire
 # count on the buffers' memory must go to 1 and back to 0 after unlock, and the GPU must still read the same data.

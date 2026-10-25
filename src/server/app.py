@@ -1,9 +1,3 @@
-"""OpenAI-compatible HTTP API over the engine: completions and chat completions, streaming via SSE.
-
-Endpoints: POST /v1/completions, POST /v1/chat/completions, POST /v1/decide (order-invariant choice / boolean /
-score decisions, src/decision.py), GET /health (process alive), GET /ready (model loaded and queue has room: load
-balancers should route here), GET /metrics (Prometheus text format).
-"""
 import asyncio
 import contextlib
 import dataclasses

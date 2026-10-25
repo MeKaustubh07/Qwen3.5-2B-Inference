@@ -1,33 +1,3 @@
-"""Per-language 4-bit damage: KL divergence of a build's next-token distribution from a reference, on long text.
-
-usage: lang_kl.py ref aya|qwen OUT_DIR                     reference (Tiny Aya fp32 on the CPU, layer by layer as
-                                                          scripts/golden_aya.py; Qwen3.5-2B HF bf16), one file per language
-       lang_kl.py ours MODEL BACKEND QT|- REF_DIR OUT.json [--keep none|shipped|topN]
-                                                          this engine (QT "-": quantized at load; --keep: the INT8 tensors)
-       lang_kl.py mlx MODEL_DIR REF_DIR OUT.json [--recipe default|mixed_4_6|q4km_bits]
-                                                          MLX-LM (run with an MLX-LM venv's python); with --recipe the HF
-                                                          checkpoint is quantized in memory under that recipe
-       lang_kl.py llama GGUF REF_DIR OUT_DIR              llama.cpp's own llama-perplexity --kl-divergence on each file
-       lang_kl.py table RESULTS_DIR                       a markdown table of every result in RESULTS_DIR
-       lang_kl.py tpc [N_CHARS]                           tokens per 1,000 characters, Qwen3.5 vs Tiny Aya, on the first
-                                                          N_CHARS (20,000) of each language's text
-       lang_kl.py bpc RESULTS_DIR                         bits per character of each model's own reference on the scored
-                                                          positions (perplexity does not compare across tokenizers)
-
-Text: two 512-token windows per language (8 languages) cut from the public-domain works of scripts/long_texts.py at 25%
-and 60% of each work, past its famous opening; Tiny Aya's windows start with BOS, Qwen3.5's have none. Scored: positions
-256-510 of each window (every one with 256+ tokens of context), as llama-perplexity scores its second half.
-The reference is stored as llama.cpp's KL base file (tools/perplexity/perplexity.cpp): "_logits_", int32 n_ctx, n_vocab,
-n_chunk, the tokens, then per chunk n_ctx - 1 - n_ctx/2 rows of nv = 2*((n_vocab+1)/2) + 4 uint16: float32 scale and
-min_log_prob, then each logit as rint((logit - min) / scale), min = max(min logit, max - 16). Every build is scored with
-llama.cpp's formula: sum over tokens with base log p > -16 of p_base * (log p_base - log q). llama.cpp reads these files
-exactly as score() does (its base perplexity equals ours to 5 digits).
-
-Tiny Aya's mlx recipes (group 64, affine, MLX-LM's rounding): default = 4 bits everywhere (= mlx_lm convert -q, the
-tied embedding/head included); mixed_4_6 = MLX-LM's recipe (v_proj and down_proj at 6 bits in llama.cpp Q4_K_M's layers,
-lm_head at 6; Tiny Aya has no lm_head, its tied embedding stays 4-bit); q4km_bits = the official Q4_K_M GGUF's bit layout
-(mixed_4_6 plus the tied embedding at 6 bits).
-"""
 import json
 import os
 import re
@@ -313,11 +283,14 @@ def bpc(results: str) -> None:
         print(f"| {lang} | " + " | ".join(cells) + " |")
 
 
+USAGE = "usage: lang_kl.py ref|ours|mlx|llama|table|tpc|bpc ARGS"
+
+
 def main() -> None:
     a = sys.argv[1:]
     opt = lambda flag: a[a.index(flag) + 1] if flag in a else None
     if not a:
-        sys.exit(__doc__)
+        sys.exit(USAGE)
     if a[0] == "ref":
         out = Path(a[2]); out.mkdir(parents=True, exist_ok=True)
         {"aya": ref_aya, "qwen": ref_qwen}[a[1]](out)
@@ -334,7 +307,7 @@ def main() -> None:
     elif a[0] == "tpc":
         tpc(int(a[1]) if len(a) > 1 else 20000)
     else:
-        sys.exit(__doc__)
+        sys.exit(USAGE)
 
 
 if __name__ == "__main__":

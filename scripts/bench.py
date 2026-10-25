@@ -1,25 +1,3 @@
-"""Benchmark harness: TTFT, TPOT, prefill/decode throughput, peak memory, and the bandwidth ceiling.
-
-usage: bench.py [--model qwen3.5-0.8b] [--backend cpu|mps|metal|metal-int8|metal-int4] [--weights FILE.qt]
-                [--prompt-lens 16,256,1024] [--new 32] [--no-cache] [--batch 1,2,4,8] [--prefill-chunk N] [--paged]
-                [--kv-blocks N] [--kv-report] [--trace] [--decide CTX [--options N] [--option-tokens K]]
-                [--out docs/bench/x.md]
-
---batch measures continuous-batching decode: B sequences advance together through model.decode_batch, and the
-aggregate rate is B tokens per step. --prefill-chunk N prefills each prompt N tokens at a time (TTFT is the whole
-prefill), as the server does; --paged puts the sequence in the model's paged pool (Tiny Aya: the sliding layers'
-rings) instead of a contiguous cache, sized for that one sequence, or with --kv-blocks N as serve.py --kv-blocks N
-sizes the server's (blocks of every layer). --kv-report prints the KV bytes one sequence holds at 1K-8K positions,
-with the pool's own layout and with one table for every layer, and how many sequences fit in a fixed budget. Memory
-is the process's physical footprint (CPU and Metal alike, as Activity Monitor shows it), now and its lifetime peak.
---trace (with --paged and one prompt length): ONE prefill in this fresh process, the footprint after every chunk: what
-one request adds to a fresh process. A long-running server also keeps what the allocator cached for earlier requests,
-which repeated runs in one process (no --trace) measure.
---decide CTX (Metal): one /v1/decide-sized scoring call (decision.score_options) over a CTX-token context with N
-options of K tokens, next to a pool of --kv-blocks blocks (or the model's) as the server holds it: the GPU memory peak
-(the allocator's own), the seconds, Metal's aborted command buffers (macOS's log) and every score in full, so a change
-to decide can be checked bit for bit.
-"""
 import argparse
 import os
 import resource

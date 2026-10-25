@@ -1,4 +1,3 @@
-"""One place that knows how to build a ready-to-run engine for each supported model."""
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -53,11 +52,21 @@ MODELS = {
     # max_model_len: the card's 8K (the config's 131072 is Gemma 3's). backends: quantized Metal only (the text model
     # is 15.5 GB in fp32, 7.8 GB in bf16). model_kwargs: bf16 KV (136 KiB per token over 34 layers); the embedding
     # scaled by sqrt(2560) rounded to bf16 (50.5), as transformers computes it with the checkpoint's bf16 weights.
+    # kv_blocks: the server's pool, 320 blocks of every layer = 680 MiB of bf16 KV (two 8K sequences: 317, the sliding
+    # layers' rings counted). GPU peaks measured as the server runs (forward_packed in 512-token chunks, then
+    # decode_batch; three runs in one process; Metal's recommended working set 5.33 GiB, kept under 0.95x): INT4 (the
+    # calibrated policy, 2.99 GB) with an 8K prompt 4.40 GiB. INT8's weights are 4.12 GB: an 8K prompt beside a
+    # 160-block pool reached 5.05 GiB on its second run, so INT8 serves at most 4096 tokens from 241 blocks (two 4K
+    # sequences): 4.79 GiB. /v1/decide holds its context outside the pool (16 options x 64 tokens): INT4 at 8K 5.47
+    # GiB, at 6K 4.84, so INT4 decides take at most 6144 tokens; INT8 at 4K 5.34, 3K 5.14, 2K 4.97, so at most 2048.
     "sarvam-translate": dict(dir="models/sarvam-translate", family="gemma3", weights="model.safetensors.index.json",
                              eos=[1, 106], chat="template", policy="configs/quant/sarvam-translate.json",
                              sampling=dict(temperature=0.01, top_p=0.95, top_k=64, repetition_penalty=1.0),
                              max_model_len=8192, backends=("metal-int8", "metal-int4"),
-                             model_kwargs=dict(kv_dtype=torch.bfloat16, embed_scale_dtype=torch.bfloat16)),
+                             model_kwargs=dict(kv_dtype=torch.bfloat16, embed_scale_dtype=torch.bfloat16),
+                             kv_blocks=320, per_backend={"metal-int8": dict(max_model_len=4096, kv_blocks=241,
+                                                                            decide_max_len=2048),
+                                                         "metal-int4": dict(decide_max_len=6144)}),
 }
 FAMILIES = {"qwen3_5": (Qwen35Config, Qwen35Model),          # family -> (config class, model class)
             "cohere2": (Cohere2Config, Cohere2Model),

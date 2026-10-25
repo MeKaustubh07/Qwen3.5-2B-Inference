@@ -1,4 +1,3 @@
-"""Week 10: the native Objective-C++ Metal runtime runs the same MSL matvec as the torch path, correctly."""
 import sys
 import time
 import torch

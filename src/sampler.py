@@ -1,4 +1,3 @@
-"""Turn the last position's logits into one chosen token id."""
 from dataclasses import dataclass
 
 import torch

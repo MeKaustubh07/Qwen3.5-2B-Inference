@@ -1,7 +1,3 @@
-"""Terminal chat with the engine: multi-turn, streaming.
-
-usage: repl.py [--model qwen3.5-0.8b|qwen3.5-2b] [--backend cpu|mps|metal|metal-int8|metal-int4] [--weights file.qt]
-"""
 import argparse
 import sys
 

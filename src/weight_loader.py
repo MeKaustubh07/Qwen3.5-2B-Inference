@@ -1,8 +1,3 @@
-"""The loading dock: a .safetensors file on disk -> named bf16 tensors in memory, zero-copy.
-
-File layout:  [8-byte little-endian header length][JSON catalog][raw tensor bytes, back-to-back]
-A big checkpoint is split into several such files plus model.safetensors.index.json (ShardedSafetensors).
-"""
 import json
 import mmap
 import struct

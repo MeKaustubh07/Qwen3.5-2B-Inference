@@ -1,4 +1,3 @@
-"""Week 13: the Qwen3.5-0.8B port vs the HF fp32 answer key: every layer, logits, greedy decode, cached decode."""
 import gc
 import glob
 import sys

@@ -1,12 +1,3 @@
-"""Tiny Aya port, M5 B6: the real model past its 4096-token sliding window, fp32 on the CPU (streamed one layer at a
-time), against the long answer key from transformers' own decoder layers (scripts/golden_aya.py --long, gitignored):
-~4.8K tokens of public-domain text in 8 languages (scripts/long_texts.py). Compared per row (each token's worst element
-over its own largest one): the final hidden state of every position, the logits of the key's rows (every 64th, the
-window's edge 4090-4100, the last 8), 9 decode steps and 10 greedy tokens. Sensitivity: the same tokens from position
-4096 on, with the window turned off, must land far from the key, so the comparison can tell a window from none.
-The quantized engine on Metal past the window: tests/test_aya_long_quant.py (a separate process, so neither holds
-the other's memory).
-Needs the gated files and the key; otherwise SKIP, or FAIL naming the command."""
 import os
 import sys
 import time

@@ -1,8 +1,3 @@
-"""Metal backend: hand-written MSL kernels (src/kernels/*.metal) compiled at runtime and dispatched on the GPU.
-
-Decode (one token) runs entirely through custom kernels: matvec, RMSNorm, RoPE, attention, SwiGLU / GeGLU.
-Prefill (many tokens) keeps PyTorch's tuned GEMM and attention for the matrix-matrix work.
-"""
 from pathlib import Path
 
 import torch

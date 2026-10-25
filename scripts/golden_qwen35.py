@@ -1,12 +1,3 @@
-"""Answer key for Qwen3.5: HF model in fp32 (or bf16 for 2B) with eager attention, ids from tokenizer.json.
-
-usage: golden_qwen35.py [model_dir] [out_dir] [fp32|bf16]
-
-Saved per prompt (tests/golden_qwen35/<i>.pt): text, ids, embed, l{i}_out for all 24 layers, final_norm, logits,
-greedy (10 tokens, do_sample=False, no repetition penalty).
-Note: AutoTokenizer resolves this checkpoint to Qwen2Tokenizer, whose regex differs from tokenizer.json on
-combining marks, so ids come from tokenizer.json directly (the engine's reference).
-"""
 import sys
 
 import torch

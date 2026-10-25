@@ -1,24 +1,3 @@
-"""Order-invariant decisions: score every option as a continuation of the same context.
-
-Listing options inside a prompt ("A) ... B) ...") gives each one a different position and lets later options see
-earlier ones, so the answer can depend on the order. Here every option is scored alone: the context is prefilled
-once, each option continues from its own copy of the context's state (the attention layers' K/V and, for the
-hybrid model, the DeltaNet recurrent state: a recurrence has no attention mask, so isolation means a copy), every
-option starts at the same position, and the options of a group run in one packed forward pass. When the context is
-too big to copy within the memory budget, options run one at a time on the context's own state, rewound after
-each. Shuffle the options and each one's score is unchanged (tests/test_decision.py).
-
-An option is scored as a whole word: its tokens, then a token that cannot continue its last word or number (a
-space, punctuation, a newline, an end token). That is P(the answer starts with the option as a unit): "1" is not
-credited with answers that start "10", and "No" is not penalized because the model would go on "No, the capital
-is ...". (Requiring the turn to end right after the option instead would measure how terse the model is.)
-
-score_options -> log P(option | context) per option (+ optionally the hidden state after the option: one embedding
-per option, as in JEV-style decision networks). decide -> the three question types of a decision dataset:
-choice (pick one of N), boolean (yes / no), score (an ordinal label, e.g. 1-5). Zero-shot: no trained head.
-The *_steps generators yield between units of work (each context chunk, each option group), so the server can
-interleave decode steps for running streams; score_options / score / decide run them to completion.
-"""
 from dataclasses import dataclass
 
 import torch

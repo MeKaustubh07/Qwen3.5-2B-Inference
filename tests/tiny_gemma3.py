@@ -1,7 +1,3 @@
-"""The shared test oracle for Gemma 3 (Sarvam-Translate), used by tests/test_gemma3.py (importing a test file would run
-it): small random Gemma3ForCausalLM models built by transformers and loaded by both HF and the engine. HF's captured
-outputs and greedy tokens come from tests/tiny_cohere2.py, whose helpers read any decoder with embed_tokens, layers and
-norm."""
 import os
 
 os.environ.setdefault("HF_HUB_OFFLINE", "1")

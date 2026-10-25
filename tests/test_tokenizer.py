@@ -1,5 +1,3 @@
-"""Compare our tokenizer against the official answer keys (scripts/golden_tokens.py) for each model's tokenizer.json:
-the ids with and without the post-processor's specials (Tiny Aya's BOS), and the decoded text."""
 import json
 import os
 import sys

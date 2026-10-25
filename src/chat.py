@@ -1,5 +1,3 @@
-"""Chat prompt formatting: Qwen3.5's ChatML written out by hand (without tool calling), or a model's own Jinja
-chat template read from its files at load time (TemplateChat; Tiny Aya)."""
 import json
 from datetime import datetime
 from pathlib import Path

@@ -1,5 +1,4 @@
 #!/bin/sh
-# Build the native Metal runtime (Objective-C++) into build/libmetal_runtime.dylib.
 set -e
 cd "$(dirname "$0")/.."
 mkdir -p build

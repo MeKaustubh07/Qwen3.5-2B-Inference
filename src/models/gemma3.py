@@ -1,23 +1,3 @@
-"""Gemma 3 text model (Sarvam-Translate), on a pluggable backend.
-
-Follows the verified spec of HF transformers' modeling_gemma3.py (docs/sarvam-translate-plan.md). What differs from
-Tiny Aya (models/cohere2.py):
-- five sliding-window layers, then one full layer, repeating; both kinds use half-split RoPE over all head dims, each
-  with its own table: sliding layers at the local theta (1e4), full layers at the global theta (1e6) with every
-  frequency divided by the linear factor (8);
-- RMSNorm scales by (1 + w), in fp32, everywhere: q_norm / k_norm over each head before RoPE, and a "sandwich" around
-  each sub-block, h = h + post_attn_norm(o_proj(attn(input_norm(h)))), h = h + post_ff_norm(mlp(pre_ff_norm(h)));
-- GeGLU MLP: down(gelu_tanh(gate(x)) * up(x));
-- embedding rows are multiplied by sqrt(hidden_size), rounded first to embed_scale_dtype (below); no logit scale and
-  no softcapping; the head is tied to the (unscaled) embedding.
-
-embed_scale_dtype: transformers rounds sqrt(hidden_size) to fp32, then to the weights' dtype (modeling_gemma3.py:117):
-50.596 for hidden 2560 with fp32 weights, 50.5 with bf16 weights, which is how the checkpoint is served. float32 (the
-default) matches the fp32 HF reference; bfloat16 is the served model's value.
-
-The checkpoint is a Gemma3ForConditionalGeneration: the text model's tensors are under "language_model.model." and the
-vision tower's are never read. A text-only save_pretrained (Gemma3ForCausalLM) keeps them under "model.".
-"""
 import torch
 
 from config import Gemma3Config

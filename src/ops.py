@@ -1,4 +1,3 @@
-"""Hand-written ops on torch primitives. No torch.nn, no torch.nn.functional model ops."""
 import math
 
 import torch

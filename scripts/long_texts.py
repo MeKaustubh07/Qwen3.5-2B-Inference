@@ -1,15 +1,3 @@
-"""Long public-domain texts in eight languages, for Tiny Aya's long-context checks (M5: past its 4096-token window).
-
-They are downloaded on demand into models/long_texts/ (gitignored) and never committed. Each Project Gutenberg file
-is checked against a pinned SHA-256. Each Wikisource text is fetched at pinned page revisions (rendered by Wikisource,
-so the text of the scanned pages it transcludes is included) and the extracted text is checked against a pinned
-SHA-256. The same tokens therefore come back every time, and a changed source fails loudly instead.
-
-build(tok, n) takes about n tokens of each work's own text (from an anchor sentence where it begins, past prefaces,
-tables of contents and transcribers' notes), in a fixed order, separated by blank lines.
-
-usage: long_texts.py [--tokens-per-language 600]   (downloads what is missing, prints each section's token count)
-"""
 import argparse
 import hashlib
 import html

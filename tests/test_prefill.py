@@ -1,10 +1,3 @@
-"""Packed and chunked prefill: several prompts in one forward pass == each prompt alone, and a scheduler that splits
-prompts into chunks (interleaved with decode steps) produces the same text as sequential decoding while running
-requests keep generating during a long prefill.
-
-usage: test_prefill.py [--target qwen|tiny|aya-int4|aya-int8]   the serving target (tests/serving_targets.py; default
-qwen). The Metal section loads Qwen3.5 on the GPU, so it runs with the qwen target only (N/A on the others). On aya
-(Tiny Aya on Metal, not exact) served greedy runs follow the near-tie rule; small pools; GPU memory and aborts gated."""
 import gc
 import sys
 import time

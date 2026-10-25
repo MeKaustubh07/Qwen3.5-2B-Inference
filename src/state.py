@@ -1,8 +1,3 @@
-"""Per-sequence decode state: the KV cache.
-
-Keys and values of past tokens never change, so each layer stores them once and every later
-step reads them back instead of recomputing the whole prefix (O(n^3) total work -> O(n^2)).
-"""
 import array
 import math
 

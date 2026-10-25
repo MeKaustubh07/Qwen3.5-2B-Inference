@@ -1,18 +1,3 @@
-"""Tiny Aya port, M4: INT8 and INT4 on the Metal backend against the fp32 answer key (scripts/golden_aya.py).
-
-The metrics of tests/test_qwen35_2b.py: the KL divergence of the next-token distribution from the reference's, and
-top-1 flips at positions where the reference's top two are more than 0.5 apart (a near-tie may flip on rounding alone);
-here the KL is pooled over all positions, decode steps included. Positions: every position of the 7 raw prompts, the
-last 8 of the 2 chat prompts, and the 9 decode steps of every prompt (the reference's own greedy tokens fed back, so
-both see the same history). The gates use every position; the KL at served positions is reported too, leaving out
-positions inside the chat template (the token read is a template token and the next one is fixed by the template; the
-chat's last position, which predicts the reply's first token, stays in) and decode steps from the reference's own stop
-token on, where a server would have stopped: there the reference is unsure (top probability ~0.5) and the KL swings
-most. Also reported: greedy agreement, resident weights and single-stream decode speed. Each scheme is measured
-twice on the same loaded weights, with an fp32 and a bf16 KV cache (M5): the gates judge both caches (the shipped one
-is bf16), and its cost is the change in KL. Needs the gated files, the answer key and the .qt files (scripts/quantize.py); otherwise
-SKIP, or FAIL naming the command.
-"""
 import gc
 import glob
 import os

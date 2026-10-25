@@ -1,13 +1,3 @@
-"""Order-invariant decisions (src/decision.py, POST /v1/decide): a forked state is independent of its original,
-scoring options from forks == scoring each option alone, shuffling the options only shuffles their scores and
-embeddings (exactly), options are complete answers, the context is prefilled in chunks, the server runs decisions
-stepwise between decode steps and drops cancelled ones, and the choice / boolean / score modes and the endpoint
-behave.
-
---target qwen (default), tiny, aya-int4 or aya-int8 (tests/serving_targets.py): on a random model the checks of
-meaning (Paris, 7 + 3, review scores, yes / no answers) print N/A, and so does the Metal section (it loads Qwen on the
-GPU; N/A beside Tiny Aya too). On aya-int4 / aya-int8 they are reported, not gated, except Paris and decision 0, and
-the tolerances are the target's (D10)."""
 import asyncio
 import gc
 import math

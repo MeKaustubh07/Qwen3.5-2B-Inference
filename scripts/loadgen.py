@@ -1,20 +1,3 @@
-"""Load generator: closed-loop clients at several concurrency levels against a running server.
-
-usage: loadgen.py [--url http://127.0.0.1:8000] [--levels 1,2,4,8] [--requests 16] [--max-tokens 64]
-                  [--temperature 0.7] [--burst N --rounds R] [--out FILE.md]
-
-Each client streams a completion, sends the next one as soon as it finishes, and records TTFT (time to the first
-streamed token), TPOT (mean gap between later tokens) and end-to-end latency. Aggregate throughput is total
-generated tokens / wall time (read from the server's own counter). Requests set the temperature (default 0.7) and
-a fixed seed and leave top-k / top-p to the model's own values, so the server's per-token sampling cost is included; the
-prompts ask for long answers so most requests run to max_tokens and levels stay comparable.
-
---burst N --rounds R (instead of the levels): N chats sent at once, all awaited, R times; TTFT p50/p95 over the N x R
-requests (arrivals that come together share the engine's first prefill passes: the case a pinned preamble speeds up).
-Both modes read /metrics before the measured requests and after them: the header gives the pinned preamble's KV units,
-the end the prefix cache's hits and bypasses among the measured requests and, once the server is idle, whether
-kv_blocks_free + prefix_pinned_units == kv_blocks_total (no unit leaked or lost; N/A on a server without them).
-"""
 import argparse
 import asyncio
 import json

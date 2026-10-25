@@ -1,11 +1,3 @@
-"""Tiny Aya port, M5 B6/B7: the quantized engine on Metal past the 4096-token sliding window. INT8 and INT4, each with
-an fp32 and a bf16 KV cache, against the long fp32 answer key (scripts/golden_aya.py --long, ~4.8K tokens in 8
-languages): KL at the key's rows before and after position 4096, the 9 decode steps, greedy agreement (gates as in
-tests/test_aya_quant.py, on every run, the decode steps also on their own), the GPU memory each run reaches against
-Metal's recommended working set, and that Metal aborted no command buffer (macOS's log). Then the bf16 KV cache's cost
-out to ~7.6K tokens (950 tokens per language), engine against engine (fp32 vs bf16 KV, INT4; no fp32 answer key
-reaches that far). The fp32 CPU engine against the same key is tests/test_aya_long.py. Needs the gated files, the key
-and the .qt files; otherwise SKIP, or FAIL naming the command."""
 import gc
 import os
 import subprocess

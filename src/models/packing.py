@@ -1,9 +1,3 @@
-"""Packed prefill: several sequences' prompt chunks in one forward pass.
-
-Every per-token operation (norms, projections, MLP) runs once over the concatenated tokens of all chunks, so each
-weight is read once for the whole pack; only the token-mixing parts (attention over each sequence's own KV cache,
-the DeltaNet recurrence over its own state) run per sequence, on that sequence's slice.
-"""
 from typing import NamedTuple
 
 import torch

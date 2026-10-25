@@ -1,19 +1,3 @@
-"""Sarvam-Translate port, M1-M2: Gemma3Config == transformers' parsing, and Gemma3Model == transformers'
-Gemma3ForCausalLM on small random models, fp32 on the CPU (tests/tiny_gemma3.py: 12 layers, full attention at 5 and 11,
-8 query heads per 2 KV heads of 32 dims, linear factor 8 on the full layers, local theta 1e4, global 1e6).
-
-Config: the real checkpoint's config.json (a Gemma3ForConditionalGeneration with legacy RoPE keys), a tiny model's
-(transformers 5's gemma3_text), legacy files with other thetas, and a text_config left to the defaults, field by field
-and RoPE table by table against transformers; every setting the engine does not implement is refused.
-Model: every layer and the logits, and bit-identical once transformers' RMSNorm and attention formulas are swapped into
-the reference backend (what is left is those ops' rounding); that the test notices a missing embedding scale, a missing
-q/k norm, a missing RoPE factor and swapped thetas; greedy tokens; cached == uncached; paged == contiguous; batched
-decode == one at a time; packed prefill == separate, with a continuing chunk; stream=True; forks; bf16 KV;
-embed_scale_dtype=bfloat16 == transformers' bf16 scale; the checkpoint's layout (text tensors under
-"language_model.model.", vision tensors never read, an untied head refused); and with an 8-token window, every path
-past it, rings reused and NaN-poisoned, and the length cap. On a Metal GPU: the bf16, INT8 and INT4 backends == the
-fp32 CPU model on the same rounded weights. The real checkpoint is read by name only (its index): no weight is loaded.
-"""
 import dataclasses
 import json
 import os

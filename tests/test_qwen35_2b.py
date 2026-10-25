@@ -1,9 +1,3 @@
-"""Week 14: the final model, Qwen3.5-2B, in bf16 / INT8 / INT4 on the Metal backend vs HF bf16 goldens.
-
-The fp32 reference (7 GB of weights) does not fit in 8 GB, so the answer key is HF in bf16. Our engine keeps
-activations in fp32, so small numeric differences are expected; agreement is judged on the tokens.
-Quantized weights are loaded from .qt files written by scripts/quantize.py (build them first, see README).
-"""
 import gc
 import glob
 import os

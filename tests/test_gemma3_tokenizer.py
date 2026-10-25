@@ -1,6 +1,3 @@
-"""Sarvam-Translate's tokenizer (Gemma 3: SentencePiece-style BPE with byte fallback) and chat template against HF:
-the answer key (scripts/golden_tokens.py models/sarvam-translate tests/golden_tokens_sarvam.json), live comparisons
-with tokenizers and transformers, synthetic tables for the paths Gemma's vocabulary never takes, and speed."""
 import itertools
 import json
 import os

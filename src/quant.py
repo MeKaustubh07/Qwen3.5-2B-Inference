@@ -1,16 +1,3 @@
-"""Block-wise symmetric weight quantization (INT8 / INT4) and the .qt file format.
-
-Every `block` consecutive weights along a row share fp16 parameters:
-    INT8 (symmetric):  scale = absmax / 127, w ≈ q * scale, q in [-127, 127]            (1 byte per weight)
-    INT4 (asymmetric): scale = (max - min) / 15, w ≈ q * scale + min, q in [0, 15], two weights per byte:
-                       element 2j in the low nibble, 2j+1 in the high nibble    (0.5 byte per weight + 2 fp16/block)
-Asymmetric INT4 uses all 16 levels across each block's real range; symmetric INT4 wasted range on the side a
-block doesn't use and cost +28% perplexity on Qwen2.5-0.5B (asymmetric: +1%).
-Blocks never cross rows, so stacking quantized matrices row-wise (fused QKV, gate+up) is exact.
-
-Mixed precision: with INT4 the tied embedding / output head stays INT8 (it scores every token; llama.cpp keeps it
-at higher precision too).
-"""
 import json
 import mmap
 import os

@@ -1,4 +1,3 @@
-"""Week 6: sampler behaviour (incl. HF parity at the top-p boundary), streaming, batched sampling."""
 import gc
 import sys
 import torch

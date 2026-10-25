@@ -1,6 +1,3 @@
-"""The shared test oracle for Cohere2 (Tiny Aya), used by tests/test_cohere2.py and tests/test_window.py (importing a
-test file would run it): small random models built by transformers and loaded by both HF and the engine, HF's own
-outputs, and a float64 brute-force attention that applies the sliding window from absolute positions."""
 import os
 
 os.environ.setdefault("HF_HUB_OFFLINE", "1")

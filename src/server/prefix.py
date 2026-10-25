@@ -1,13 +1,3 @@
-"""Pinned chat preamble (opt-in: create_app(prefix_cache=True), serve.py --prefix-cache).
-
-A chat template's fixed preamble is prefilled once, at startup, into a sequence that is never freed; a request whose
-ids start with it borrows those KV units read-only (WindowedSequence.borrow) and prefills only the rest. Tiny Aya's
-one-line chats share 361 tokens, 352 of them whole blocks: a 372-token chat prefills 20 (INT4: 1.46 s -> 0.33 s).
-A hit equals prefilling the prompt with a chunk boundary at the preamble's end, bit for bit (same keys, same positions).
-
-Only for a pool that keeps per-sequence units (GroupedKVPool: Cohere2, nothing recurrent to snapshot) and a model's
-own chat template. A borrowed ring slot must never be retagged, so a request whose prompt + max_tokens would wrap its
-rings onto the shared slots (over ring x block size: 4,624 tokens at chunk 512) is a bypass: it prefills everything."""
 import torch
 
 from chat import TemplateChat, format_chat

@@ -1,4 +1,3 @@
-"""ctypes bindings for the native Metal runtime (src/native/metal_runtime.mm)."""
 import ctypes
 from pathlib import Path
 

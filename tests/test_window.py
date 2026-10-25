@@ -1,8 +1,3 @@
-"""Tiny Aya port, M5 part B: the sliding window (each query sees itself and the W - 1 keys before it, as transformers'
-`kv_idx > q_idx - sliding_window` on top of causal), checked against a float64 oracle written from absolute positions
-(tests/tiny_cohere2.py), on the CPU. Every test crosses the window: windows that do not divide the block size, chunks
-longer than the window, chunks that start or end at it, and freed KV blocks filled with NaN so a stray read shows.
-"""
 import sys
 import tempfile
 

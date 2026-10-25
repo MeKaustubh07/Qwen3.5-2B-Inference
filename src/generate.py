@@ -1,4 +1,3 @@
-"""Autoregressive generation loops: prefill the prompt once, then decode one token at a time."""
 from collections.abc import Iterator
 
 import torch

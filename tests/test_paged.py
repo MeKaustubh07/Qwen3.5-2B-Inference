@@ -1,4 +1,3 @@
-"""Week 8: paged KV cache == contiguous cache, sequence isolation, allocator behaviour, memory accounting (Qwen3.5-0.8B)."""
 import sys
 import torch
 

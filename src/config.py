@@ -1,5 +1,3 @@
-"""Model recipe cards, read from config.json: Qwen35Config (under text_config), Cohere2Config (top level) and
-Gemma3Config (either)."""
 import copy
 import json
 from dataclasses import dataclass

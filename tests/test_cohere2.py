@@ -1,15 +1,3 @@
-"""Tiny Aya port, M2: Cohere2Model == transformers' Cohere2ForCausalLM on small random models, fp32 on the CPU.
-
-No download: each model is built from a config with random weights (large ones, so attention is far from uniform and
-a RoPE or LayerNorm mistake cannot hide in the noise), saved with save_pretrained and loaded by both. Checked: every
-layer and the logits (8 query heads per 2 KV heads: Tiny Aya's ratio of 4); that the test notices broken RoPE; the
-LayerNorm eps at every norm; greedy tokens; cached == uncached; paged == contiguous; batched decode == one at a time;
-packed prefill == separate, with a continuing chunk; forks that diverge at the same position; an untied head refused;
-and the length cap (max_position_embeddings) on a model with an 8-token window and a 16-position cap: exact up to 16
-positions with the window binding, refused past them, for fresh and continuing sequences, packs and mixed batches, with
-no state moved and no KV block taken (the window itself: tests/test_window.py). On a Metal GPU, also: a decode step
-embeds its token id as it was when called, and every non_blocking copy in src/ goes through state.to_device.
-"""
 import os
 import sys
 from pathlib import Path

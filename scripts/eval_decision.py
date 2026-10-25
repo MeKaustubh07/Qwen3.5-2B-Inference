@@ -1,14 +1,3 @@
-"""Zero-shot accuracy of /v1/decide's scoring on the test split of avbiswas/bev-decision (choice / boolean / score).
-
-usage: eval_decision.py [--model qwen3.5-2b] [--backend metal-int4] [--per-type 100] [--max-prompt-tokens 1536]
-                        [--shuffle-check 40] [--seed 0] [--out FILE.md]
-
-Rows come from the Hugging Face datasets-server API (JSON pages, nothing stored in the repo). Each row is a state
-plus up to 9 questions; each question is scored on its own: context = state, question = its instructions, options =
-its labels (choice: the criteria descriptions; score: the ordinal labels; boolean: Yes / No). Reported next to
-chance-level baselines. --shuffle-check re-scores that many choice/score questions with the options shuffled and
-checks the decision still names the same option with the same probabilities.
-"""
 import argparse
 import collections
 import json

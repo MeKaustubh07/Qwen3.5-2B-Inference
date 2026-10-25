@@ -1,26 +1,3 @@
-"""The machinery shared by decoders whose every layer is attention (Cohere2 / Tiny Aya, Gemma 3 / Sarvam-Translate),
-on a pluggable backend. A family supplies block (how attention and the MLP join the residual stream), _project (the
-q/k/v projection with its norms and RoPE), _final_norm, and extends embed, head or _qkv where it differs; this class
-does the rest for every family:
-
-- weights: each 2-D weight prepared once in the backend's resident format, [q ; k ; v] and [gate ; up] fused;
-- state: one KV cache per layer, contiguous or paged (state.GroupedKVPool: the sliding layers keep a ring of blocks per
-  sequence, so their memory stops growing past the window), so forks, the pool and the scheduler work unchanged;
-- forward, forward_packed, packed_hidden and decode_batch, each refusing a sequence past max_positions (or a chunk the
-  ring cannot hold) and reserving its KV blocks before any layer runs, so a refused forward moves nothing.
-
-Sliding window: on the sliding layers the query at position p sees keys max(0, p - W + 1) .. p (transformers:
-`kv_idx > q_idx - sliding_window`). They read only that suffix of their KV cache and pass the window to the backend,
-which masks the band; the full layers read everything. RoPE positions stay absolute.
-
-stream=True (the fp32 CPU reference of a real model, which would not fit in memory if every widened weight were kept):
-each weight is widened when used and dropped after, the embedding rows are read from the stored table, and the tied
-head is widened head_rows rows at a time. Slower, the same numbers; peak memory ~1 layer instead of the model.
-
-kv_dtype: what the KV cache stores. fp32 (the default) keeps K/V exactly as computed, as HF does with fp32
-activations; bf16 (served on Metal: half the bytes) rounds them as they are stored, and every read widens them back to
-fp32, so all arithmetic stays fp32. The rounding is a measured deviation (tests/test_aya_quant.py).
-"""
 from functools import partial
 
 import torch

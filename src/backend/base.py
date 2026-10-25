@@ -1,8 +1,3 @@
-"""The backend protocol: the fixed set of operations the model is built from.
-
-The model only ever calls these. Swapping the implementation (fp32 CPU reference, bf16 on the GPU,
-hand-written Metal kernels, quantized weights) never touches model code.
-"""
 from typing import Protocol
 
 import torch

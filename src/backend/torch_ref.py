@@ -1,4 +1,3 @@
-"""Reference backend: the hand-written ops from ops.py, on CPU in fp32 (the oracle) or on the GPU (MPS)."""
 import torch
 
 import ops

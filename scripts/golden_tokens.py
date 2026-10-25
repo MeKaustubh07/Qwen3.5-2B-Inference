@@ -1,11 +1,3 @@
-"""Answer key: tokenize test strings with the official HF tokenizer, write JSON goldens.
-
-Per case: ids (HF's default encode, with the post-processor's specials, e.g. Tiny Aya's BOS), ids_plain (without
-them) and decoded (HF's decode of ids_plain).
-usage: golden_tokens.py [model_dir] [out.json]      (default: Qwen3.5-0.8B -> tests/golden_tokens_qwen35.json)
-       golden_tokens.py models/tiny-aya-global tests/golden_tokens_aya.json   (gitignored: needs the gated files)
-       golden_tokens.py models/sarvam-translate tests/golden_tokens_sarvam.json   (adds sarvam_cases below)
-"""
 import json
 import random
 import sys

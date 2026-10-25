@@ -1,20 +1,3 @@
-"""Serving targets for the server suites (tests/test_server.py, test_prefill.py, test_decision.py), chosen with
---target: the engine they serve and what they may assume about it.
-
-  qwen  Qwen3.5-0.8B in fp32 on the CPU (the default): exact, a real trained model, a thinking mode.
-  tiny  a random 8-layer Cohere2 (Tiny Aya's architecture) with an 8-token sliding window, a byte-level BPE trained
-        here at test time (BOS from its post-processor, as Tiny Aya's), and a chat template of its own with a preamble
-        of 76 tokens: exact (fp32 on the CPU) and fast, but random, so checks of meaning do not apply. Served
-        with prefill chunks of 8, its rings hold 2 blocks, so every request past 32 tokens wraps its ring over HTTP.
-  aya-int4, aya-int8  Tiny Aya Global on Metal, INT4 or INT8 weights (models/tiny-aya-global/model.<scheme>.qt) and
-        bf16 KV: real but not exact. A batch of 2 or more rows takes the batched INT4/INT8 matvec, which dequantizes
-        in another order than the one-row kernel (about 1e-7 relative on one linear, about 1e-2 on the logits after
-        36 layers; one sequence alone, paged or contiguous, is bit-identical), so served greedy runs are compared
-        token by token under the near-tie rule (Target.agree), and checks of meaning are reported, not gated, except
-        Paris and decision 0 (D10). Each suite also gates peak GPU memory and Metal aborts (gpu_gates). SKIP without
-        a Metal GPU or the model's files. One target per process: the suites' Qwen Metal sections are N/A beside it.
-
-A check that does not apply to a target prints "N/A" (run_tests.py counts SKIP lines as missing files)."""
 import argparse
 import gc
 import os

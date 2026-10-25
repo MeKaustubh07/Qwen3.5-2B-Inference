@@ -1,19 +1,3 @@
-"""Run the OpenAI-compatible server.
-
-usage: serve.py [--model qwen3.5-2b] [--backend metal-int4] [--weights models/qwen3.5-2b/model.int4.qt]
-                [--host 127.0.0.1] [--port 8000] [--max-batch 8] [--max-waiting 64] [--kv-blocks N]
-                [--max-model-len N] [--drain-timeout 25] [--prefill-chunk 512] [--batch-wait-ms 5]
-                [--no-lock-weights] [--prefix-cache]
-
---prefix-cache pins the chat template's fixed preamble in the KV pool (Tiny Aya: 352 of a one-line chat's ~372 tokens),
-so chats that start with it prefill only the rest (src/server/prefix.py).
-With a quantized backend and no --weights, models/<model>/model.<int8|int4>.qt is used when it exists (quantizing
-at load time would briefly need the fp32 weights in RAM). The model is warmed up before the port opens, then its
-weights are locked in RAM (Metal backends), so that an idle server's weights are not compressed or swapped out;
---no-lock-weights turns that off.
-On SIGTERM: stop accepting, let open requests finish for up to --drain-timeout seconds, then exit. Give the
-supervisor a longer stop timeout than that (e.g. docker run --stop-timeout 30).
-"""
 import argparse
 import logging
 import sys

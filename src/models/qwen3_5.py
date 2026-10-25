@@ -1,10 +1,3 @@
-"""Qwen3.5 (text path): 18 Gated DeltaNet layers + 6 gated full-attention layers, on a pluggable backend.
-
-Follows the verified spec of HF transformers' modeling_qwen3_5.py. Traps handled explicitly (vs Qwen2):
-RMSNorm scales by (1 + w); the DeltaNet output norm uses plain w; q_proj rows interleave [query | gate] per head;
-q/k are RMS-normed per head before a PARTIAL RoPE (first 64 of 256 dims, theta 1e7); attention output is gated by
-sigmoid(gate) before o_proj; the causal conv runs before the q/k/v split; no biases anywhere; head_dim is explicit.
-"""
 import math
 
 import torch

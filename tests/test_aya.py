@@ -1,8 +1,3 @@
-"""Tiny Aya Global (Cohere2), everything before the model itself: Cohere2Config against transformers' config class
-(and the configs it must refuse), the sharded weights against the safetensors library (and a corrupt index), the
-model's own chat template against apply_chat_template, the registry entry and its guards, the BOS policy where prompts
-are tokenized, the server with a stand-in scheduler, and a guard that none of the gated files' content is in the repo.
-Needs the gated files in models/tiny-aya-global (see docs/tiny-aya-plan.md); otherwise it prints SKIP."""
 import json
 import os
 import sys

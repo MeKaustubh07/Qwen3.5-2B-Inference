@@ -1,14 +1,3 @@
-"""The pinned chat preamble (src/server/prefix.py; Scheduler / create_app(prefix_cache=True), serve.py --prefix-cache):
-it builds where it can (P = the probe chats' common prefix in whole blocks) and is refused where it cannot; a sequence
-that borrows it and prefills the rest == a fresh one prefilled with a chunk boundary at P, bit for bit; borrow and the
-write guard refuse what would break the holder; served with the cache == without it (P fewer prefill tokens per hit),
-with bypasses, misses whose rings wrap, preemption and the never-fit check; HTTP and /metrics.
-
-usage: test_prefix.py [--target qwen|tiny|aya-int4|aya-int8]   the serving target (tests/serving_targets.py; default
-qwen). Prefill chunks of 128 on tiny (a ring of 10 blocks: hits up to 160 tokens), 512 on aya (289 blocks: 4,624).
-qwen has no windowed pool: the cache is refused, nothing else changes, the other checks print N/A. On tiny the pools
-are NaN-poisoned (a stale read shows); on aya (Metal, not exact) served greedy runs follow the near-tie rule against
-references prefilled as a hit is (split at P), and GPU memory and Metal aborts are gated."""
 import asyncio
 import functools
 import queue

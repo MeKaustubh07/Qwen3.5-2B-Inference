@@ -11,3 +11,6 @@ tests/golden_tokens_aya.json
 tests/golden_aya/
 tests/golden_aya_long/
 tests/golden_tokens_sarvam.json
+tests/golden_gemma3/
+tests/golden_gemma3_long/
+scripts/calib_texts.py

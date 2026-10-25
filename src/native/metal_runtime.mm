@@ -1,8 +1,3 @@
-// Minimal native Metal runtime: owns its own device, command queue and compute pipelines, compiles MSL
-// source at runtime (MTLDevice newLibraryWithSource: no Xcode or offline compiler required), keeps
-// weights resident in GPU buffers, and exposes a tiny C API that Python calls through ctypes.
-//
-// Build: scripts/build_native.sh  ->  build/libmetal_runtime.dylib
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
 #include <cstdint>

@@ -1,18 +1,3 @@
-"""Continuous-batching scheduler.
-
-One engine thread owns the GPU. Requests wait in a bounded queue (full -> QueueFull -> HTTP 429), then move
-waiting -> prefilling -> running. Each loop:
-  1. admit waiting requests while there is a batch slot and enough free KV blocks (their prompt blocks are
-     reserved now, so a prefill never runs out halfway);
-  2. run ONE packed prefill forward over at most `prefill_chunk` prompt tokens, taken first-come-first-served
-     from the prefilling requests: several short prompts share one pass over the weights, and a long prompt is
-     split into chunks across iterations (chunked prefill), so running requests are never stalled for long;
-  3. run ONE batched decode step for every running request (each weight read once for the whole batch);
-  4. sample the batch's next tokens in one batched pass and stream them; finished requests free their KV
-     blocks immediately, so a waiting request can take the slot on the very next step.
-If the KV pool runs dry mid-generation, the newest running request is preempted: its blocks are freed and it is
-re-queued to recompute its prefix later (vLLM-style recompute preemption); its client sees no gap in the text.
-"""
 import collections
 import concurrent.futures
 import inspect

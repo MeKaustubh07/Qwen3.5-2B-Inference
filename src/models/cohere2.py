@@ -1,21 +1,3 @@
-"""Cohere2 (Tiny Aya): every layer is attention, on a pluggable backend.
-
-Follows the verified spec of HF transformers' modeling_cohere2.py (docs/tiny-aya-plan.md). What differs from Qwen3.5:
-- no DeltaNet: all 36 layers are attention. Three sliding-window layers (with RoPE) are followed by one full layer
-  with no positional encoding at all, repeating;
-- one LayerNorm per layer (mean subtracted, plain weight, no bias) feeds attention AND the MLP, in parallel:
-  h + attn(LN(h)) + mlp(LN(h));
-- RoPE rotates neighbouring numbers (2i, 2i+1) ("interleaved", GPT-J) instead of (i, i + d/2), at theta 50000, over
-  all head dims;
-- logits are multiplied by logit_scale; no QK-norm, no output gate, no biases; the head is tied to the embedding.
-
-Interleaved RoPE without a new kernel: within each head, the rows of W_q and W_k are reordered at load time so that
-numbers 2i and 2i+1 land at i and i + d/2. The half-split rotation then turns exactly the pairs HF turns, at the
-same frequencies, and q.k does not change when q and k get the same reordering (cached keys stay reordered).
-
-The machinery every all-attention family shares (sliding window, KV state, forward paths, stream=True, kv_dtype)
-is models/decoder.py's.
-"""
 import torch
 
 from models.decoder import AttentionDecoder

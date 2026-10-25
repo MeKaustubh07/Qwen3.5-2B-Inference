@@ -1,16 +1,3 @@
-"""Keep model weights in RAM: mlock the unified-memory pages behind MPS tensors.
-
-On Apple silicon the GPU reads the weights from ordinary RAM. While a server sits idle, macOS compresses or swaps
-those pages, and the next request first waits for them to come back: measured on the 8 GB M2, first token 0.24 s
-warm vs 0.69-0.81 s after 1-4 minutes idle, with 1.4-2.2 GB brought back in (docs/bench/serving.md). Every MPS
-tensor lives in an MTLBuffer with shared storage, so the buffer has a CPU address, and mlock() on it wires the
-pages: the OS can then neither compress nor swap them. (A Metal residency set with requestResidency did not stop
-the reclaim in the same measurement.)
-
-The MTLBuffer handle is the MPS storage's data_ptr() (PyTorch's MPS allocator hands out id<MTLBuffer> as the data
-pointer); its CPU address and length come from the Objective-C runtime through ctypes, so no compiled helper is
-needed. That is an implementation detail of PyTorch's MPS backend, checked by tests/test_kernels.py.
-"""
 import ctypes
 import functools
 

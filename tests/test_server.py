@@ -1,11 +1,3 @@
-"""Week 15: serving. Batched decode == sequential decode for the hybrid Qwen3.5 model (fp32 CPU, exact greedy), sequences
-joining/leaving mid-batch, batched quantized kernels == per-row kernels, Metal batched decode within bf16 noise,
-preemption-by-recompute, and the HTTP API: completions, chat, SSE streaming, 429 backpressure, validation,
-metrics, cancellation, seeded sampling and graceful drain.
-
---target tiny serves a small random Cohere2 instead (tests/serving_targets.py; its sliding-window rings wrap over
-HTTP), aya-int4 / aya-int8 the real Tiny Aya on Metal, whose batched replies are compared with sequential greedy under
-the near-tie rule (Target.agree): the Metal sections (Qwen3.5-0.8B on the GPU) print N/A beside them."""
 import asyncio
 import gc
 import json

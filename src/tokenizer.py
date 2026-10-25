@@ -1,12 +1,3 @@
-"""BPE tokenizer, built from tokenizer.json alone, in one of two modes read from the file:
-
-byte-level (Qwen3.5, Tiny Aya):  added-token split -> NFC (if the file asks) -> regex pre-splits -> bytes
-                                 -> stand-in chars -> BPE merges by priority -> vocab lookup [-> BOS in front].
-SentencePiece-style (Gemma 3):   added-token split -> " " written as "▁" (the text between added tokens is one chunk)
-                                 -> characters, or their UTF-8 bytes as <0xXX> tokens when not in the vocabulary
-                                 -> BPE merges by priority -> vocab lookup [-> BOS in front].
-Decode runs the steps backwards.
-"""
 import heapq
 import json
 import unicodedata
