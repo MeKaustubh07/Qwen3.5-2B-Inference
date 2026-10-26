@@ -35,7 +35,7 @@ load test). Details and methodology: [`docs/bench/compare.md`](docs/bench/compar
 
 | layer | highlights |
 |---|---|
-| models | Qwen3.5-2B (served, INT4) and Qwen3.5-0.8B (same-architecture fp32 reference), 18 Gated DeltaNet + 6 gated-attention layers; Qwen2.5-0.5B was the bring-up model (removed 2026-09-30) |
+| models | Qwen3.5-2B (served, INT4) and Qwen3.5-0.8B (same-architecture fp32 reference), 18 Gated DeltaNet + 6 gated-attention layers; [Tiny Aya Global](#tiny-aya) (Cohere2, 3.35B); [Sarvam-Translate](#sarvam-translate) (Gemma 3 4B text model); Qwen2.5-0.5B was the bring-up model (removed 2026-09-30) |
 | correctness | vs HF `transformers`: bring-up (Qwen2.5-0.5B, removed): layer-0 block ≤ 3.3e-5 and logits ≤ 3e-4 (fp32), greedy == HF on 5 prompts; Qwen3.5-0.8B every one of 24 layers ≤ 3.8e-6 relative (fp32), greedy identical on 7 prompts incl. Hindi; Qwen3.5-2B vs HF bf16 (fp32 does not fit in 8 GB): KL 0.0004 / 0.0007 / 0.045 for bf16 / INT8 / INT4, greedy 64 / 70 / 47 of 70 tokens, every divergence at a near-tie |
 | state | paged KV cache (block allocator, block tables) + fixed-size DeltaNet recurrent/conv state per sequence |
 | kernels (MSL) | bf16/INT8/INT4 matvec (+ batched), paged attention, batched DeltaNet step, RMSNorm, RoPE, fused SwiGLU, INT4/INT8 → fp32 expansion |
@@ -194,10 +194,11 @@ decoded ~4 tok/s, and `docker stop` drained an in-flight stream before exiting. 
 
 ```
 src/weight_loader.py   safetensors mmap, sharded index  src/state.py        KV caches, block allocator, HybridState
-src/tokenizer.py       byte-level BPE                   src/quant.py        INT8/INT4, policy, .qt files
+src/tokenizer.py       byte-level / SentencePiece BPE   src/quant.py        INT8/INT4, policy, .qt files
 src/chat.py            ChatML, model Jinja templates    src/sampler.py      temperature/top-k/top-p/repetition
-src/config.py          Qwen35Config, Cohere2Config
-src/models/            Qwen3.5, Cohere2, packed prefill src/engine.py       model registry, load_engine
+src/config.py          Qwen35Config, Cohere2Config, Gemma3Config
+src/models/            Qwen3.5, AttentionDecoder (Cohere2, Gemma 3), packed prefill
+src/engine.py          model registry, load_engine
 src/backend/           protocol, torch reference, Metal src/kernels/        *.metal kernels
 src/native/            Objective-C++ Metal runtime      src/server/         scheduler, API, metrics
 scripts/               goldens, bench, quantize, calibrate, serve, loadgen, repl, run_tests
@@ -245,6 +246,49 @@ outputs quoted in `docs/` are model-generated.
       url={https://arxiv.org/abs/2603.11510},
 }
 ```
+
+## Sarvam-Translate
+
+The engine also runs [Sarvam-Translate](https://huggingface.co/sarvamai/sarvam-translate) (Gemma 3 4B text model,
+fine-tuned for translation between English and the 22 scheduled Indian languages): plan in
+[`docs/sarvam-translate-plan.md`](docs/sarvam-translate-plan.md), results in [`docs/results-log.md`](docs/results-log.md),
+the 22-language study in [`docs/bench/sarvam-translate.md`](docs/bench/sarvam-translate.md). Its text model in fp32,
+streamed one layer at a time, matches transformers' own layers within 1.3e-5 on the logits, with greedy output
+identical on 10 of 10 prompts and past its 1024-token sliding window on a 1,416-token text. On an 8 GB Mac it serves up
+to 8,192 tokens in INT4 (4,096 for `/v1/decide`) and 4,096 in INT8 (1,024), budgets measured in one long-running
+process (`scripts/bench.py --serve-mix`).
+
+| IN22-Gen, 50 sentences per direction, all INT4 | Sarvam-Translate (2.99 GB) | Tiny Aya Global (2.34 GB) | Qwen3.5-2B (1.41 GB) |
+|---|---:|---:|---:|
+| chrF++, English -> 22 languages (macro) | **50.4** | 26.7 | 15.4 |
+| chrF++, 22 languages -> English (macro) | **52.2** | 40.5 | 33.8 |
+| chrF++, Tiny Aya's 9 languages -> English | 54.9 | **56.7** | 45.4 |
+| KL from fp32 (the M3 answer key) | 0.041 (INT8: 0.0005) | — | — |
+
+Sarvam-Translate leads into every language, and only it writes Manipuri (Meitei Mayek), Santali (Ol Chiki), Bodo and
+Dogri (39.7-59.5 vs 0.4-8.3); into English Tiny Aya beats it on Hindi, Marathi and Urdu (+3.1 to +4.7, CIs above or
+touching zero). Its tokenizer spells Meitei Mayek mostly in bytes (1.83 tokens per character vs Hindi's 0.28), so a
+Manipuri translation takes ~6.5x the decode steps. Details, CIs and threats to validity in
+[`docs/bench/sarvam-translate.md`](docs/bench/sarvam-translate.md). Setup (ungated download, pinned revision; the
+answer keys are gitignored):
+
+```bash
+scripts/.venv/bin/hf download sarvamai/sarvam-translate --revision e0a7a6bc21665b568c0c624986d422f6d7f58326 --local-dir models/sarvam-translate
+```
+
+```bash
+scripts/.venv/bin/python scripts/quantize.py models/sarvam-translate/model.safetensors.index.json models/sarvam-translate/model.int4.qt --scheme int4 --prefix language_model.model. --policy configs/quant/sarvam-translate.json
+```
+
+```bash
+scripts/.venv/bin/python scripts/golden_gemma3.py && scripts/.venv/bin/python scripts/golden_gemma3.py --long
+```
+
+Sarvam-Translate is by Sarvam AI, in partnership with AI4Bharat, and is built on Google's Gemma 3. Its weights are not
+part of this repository: they are on Hugging Face under the licence tag `gpl-3.0`, and Gemma 3 has its own terms of
+use. This is an independent project, not affiliated with or endorsed by Sarvam AI; the hosted Sarvam API was never
+used. Sample outputs quoted in `docs/` are model-generated. IN22-Gen is by AI4Bharat (CC-BY-4.0); only scores and
+sentence ids are published here, never its text.
 
 ## License
 

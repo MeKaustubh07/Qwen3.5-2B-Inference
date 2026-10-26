@@ -1,6 +1,4 @@
-import gc
 import os
-import subprocess
 import sys
 import time
 
@@ -10,12 +8,16 @@ import torch
 sys.path.insert(0, "src")
 from engine import load_engine
 from quant import QtFile, QuantTensor, load_policy, scheme_for
+from serving_targets import free_gpu, gpu_peak, kl, metal_aborts, top2_gap
 
 D, G, LONG = "models/sarvam-translate", "tests/golden_gemma3", "tests/golden_gemma3_long/0.pt"
 POLICY = "configs/quant/sarvam-translate.json"
 BUILDS = {"int8": ("metal-int8", "model.int8.qt", ""), "int4-flat": ("metal-int4", "model.int4-flat.qt", ""),
           "int4": ("metal-int4", "model.int4.qt", f" --policy {POLICY}")}
-GATES = {"int8": (0.05, 0.02), "int4-flat": (0.15, 0.10), "int4": (0.15, 0.10)}   # KL, top-1 flips
+# KL on the main key, KL on the long key, top-1 flips (share of non-tied positions), each a margin over what the build
+# measured (KL main / long, flips): INT8 0.0006 / 0.0016, 0/483; flat INT4 0.0509 / 0.0731, 19; policy 0.0413 / 0.0522, 4
+GATES = {"int8": (0.005, 0.005, 0.01), "int4-flat": (0.065, 0.09, 0.06), "int4": (0.05, 0.065, 0.02)}
+POLICY_GAIN = 0.9                                              # the policy's KL at most this times flat INT4's
 if not os.path.exists(f"{D}/model.safetensors.index.json") or not torch.backends.mps.is_available():
     print(f"SKIP: needs the checkpoint in {D} and a Metal GPU")
     sys.exit(0)
@@ -35,54 +37,45 @@ recs = [torch.load(f"{G}/{f}") for f in goldens]
 key_long = torch.load(LONG)
 
 
-def kl(ref, ours, V):
-    """KL(ref || ours) per row, in float64 on the CPU."""
-    lp, lq = torch.log_softmax(ref[:, :V].double(), -1), torch.log_softmax(ours[:, :V].double(), -1)
-    return (lp.exp() * (lp - lq)).sum(-1)
-
-
-def gpu_peak():
-    """This run's GPU memory high point: the allocator's peak heap bytes, plus what Metal holds outside them now."""
-    A = torch.accelerator
-    return A.max_memory_reserved() + max(0, torch.mps.driver_allocated_memory() - A.memory_reserved())
-
-
-def free_gpu():
-    gc.collect()
-    torch.mps.empty_cache()
-
-
 def measure(m, tok, eos_ids) -> dict:
-    """The model's next-token distributions vs the main key's at every recorded position; free greedy per prompt."""
+    """The model's next-token distributions vs the main key's at every recorded position (fed the key's tokens), and
+    free greedy per prompt from a fork of the same prefill: every live sequence of both in one decode_batch per step."""
     V = tok.vocab_size()
     template = set(tok.special.values()) - {tok.bos_id}
+    keys = [r["greedy"].tolist() for r in recs]
+    forced = [m.new_state(len(r["ids"]) + len(g) + 1) for r, g in zip(recs, keys)]
+    ours = [[m.forward(r["ids"], state=st).cpu()] for r, st in zip(recs, forced)]
+    free = [st.fork() for st in forced]
+    nxt, same, alive = [int(o[0][-1, :V].argmax()) for o in ours], [0] * len(recs), [True] * len(recs)
+    while True:
+        for j, g in enumerate(keys):                           # free greedy: how many tokens equal the key's
+            if alive[j]:
+                alive[j] = nxt[j] == g[same[j]]
+                same[j] += alive[j]
+                alive[j] &= same[j] < len(g)
+        teach = [j for j, g in enumerate(keys) if len(ours[j]) < len(g)]
+        run = [j for j in range(len(recs)) if alive[j]]
+        if not teach and not run:
+            break
+        out = m.decode_batch([keys[j][len(ours[j]) - 1] for j in teach] + [nxt[j] for j in run],
+                             [forced[j] for j in teach] + [free[j] for j in run]).cpu()
+        for j, row in zip(teach, out):
+            ours[j].append(row[None])
+        for j, row in zip(run, out[len(teach):]):
+            nxt[j] = int(row[:V].argmax())
+    del forced, free
     kls, served, per = [], [], []
-    for r in recs:
-        n, g = len(r["ids"]), r["greedy"].tolist()
-        st = m.new_state(n + len(g) + 1)
-        ours = [m.forward(r["ids"], state=st).cpu()]
-        for t in g[:-1]:                                       # the key's tokens, so both see the same history
-            ours.append(m.forward(torch.tensor([t]), state=st).cpu())
-        ours, ref = torch.cat(ours), torch.cat([r["logits"], r["step_logits"]])
-        kls.append(kl(ref, ours, V))
+    for r, g, o, sm in zip(recs, keys, ours, same):
+        n, o, ref = len(r["ids"]), torch.cat(o), torch.cat([r["logits"], r["step_logits"]])
+        kls.append(kl(ref, o, V))
         seq = r["ids"].tolist() + g                            # seq[i]: the token position i reads
         stop = next((n + k for k, t in enumerate(g) if t in eos_ids), len(seq))
-        served.append(torch.tensor([i < stop and (i >= n - 1 or seq[i] not in template) for i in range(len(ours))]))
-        top2 = ref[:, :V].topk(2, -1).values
-        clear = (top2[:, 0] - top2[:, 1]) > 0.5
-        flips = int(((ours[:, :V].argmax(-1) != ref[:, :V].argmax(-1)) & clear).sum())
-        del st
-        st = m.new_state(n + len(g) + 1)                       # free greedy: how many tokens equal the key's
-        nxt, same = int(m.forward(r["ids"], state=st, last_only=True)[0, :V].argmax()), 0
-        while nxt == g[same]:
-            same += 1
-            if same == len(g):
-                break
-            nxt = int(m.forward(torch.tensor([nxt]), state=st, last_only=True)[0, :V].argmax())
-        gap = (top2[n - 1 + same, 0] - top2[n - 1 + same, 1]).item() if same < len(g) else None
+        served.append(torch.tensor([i < stop and (i >= n - 1 or seq[i] not in template) for i in range(len(o))]))
+        gap = top2_gap(ref, V)
+        clear = gap > 0.5
+        flips = int(((o[:, :V].argmax(-1) != ref[:, :V].argmax(-1)) & clear).sum())
         per.append(dict(name=(r["target"] or "raw")[:3], kl=kls[-1].mean().item(), flips=flips,
-                        clear=int(clear.sum()), same=same, n=len(g), gap=gap))
-        del st
+                        clear=int(clear.sum()), same=sm, n=len(g), gap=gap[n - 1 + sm].item() if sm < len(g) else None))
     k, is_served = torch.cat(kls), torch.cat(served)
     return dict(kl=k.mean().item(), kl_max=k.max().item(), kl_served=k[is_served].mean().item(),
                 n_served=int(is_served.sum()), flips=sum(p["flips"] for p in per), clear=sum(p["clear"] for p in per),
@@ -170,10 +163,10 @@ for build, (backend, file, how) in BUILDS.items():
     free_gpu()
 
 for (build, kv), s in ((k, v) for k, v in summary.items() if isinstance(k, tuple)):   # every run: a broken one must
-    kl_max, flips_max = GATES[build]                                                  # not hide behind the other
-    check(f"{build}, {str(kv)[6:]} KV: KL vs the fp32 key < {kl_max} ({s['kl']:.4f}; long key {s['long']['all']:.4f}) "
-          f"and top-1 flips <= {flips_max:.0%} of non-tied positions ({s['flips']}/{s['clear']})",
-          s["kl"] < kl_max and s["long"]["all"] < kl_max and s["flips"] <= flips_max * s["clear"])
+    kl_max, long_max, flips_max = GATES[build]                                        # not hide behind the other
+    check(f"{build}, {str(kv)[6:]} KV: KL vs the fp32 key < {kl_max} ({s['kl']:.4f}), long key < {long_max} "
+          f"({s['long']['all']:.4f}), top-1 flips <= {flips_max:.0%} of non-tied positions ({s['flips']}/{s['clear']})",
+          s["kl"] < kl_max and s["long"]["all"] < long_max and s["flips"] <= flips_max * s["clear"])
 for build in BUILDS:
     if (build, torch.float32) in summary and (build, torch.bfloat16) in summary:
         d = summary[build, torch.bfloat16]["kl"] - summary[build, torch.float32]["kl"]
@@ -190,9 +183,11 @@ for kv in (torch.float32, torch.bfloat16):                  # INT8 may leave the
               all(p["gap"] <= 0.5 for p in off))
 if ("int4", torch.bfloat16) in summary and ("int4-flat", torch.bfloat16) in summary:
     p, f = summary["int4", torch.bfloat16], summary["int4-flat", torch.bfloat16]
-    check(f"the calibrated policy, measured on text it never saw: KL {p['kl']:.4f} vs flat INT4 {f['kl']:.4f} "
-          f"(served positions {p['kl_served']:.4f} vs {f['kl_served']:.4f}; long key {p['long']['all']:.4f} vs "
-          f"{f['long']['all']:.4f})", p["kl"] < f["kl"])
+    check(f"the calibrated policy, measured on text it never saw, at most {POLICY_GAIN} x flat INT4's KL: "
+          f"{p['kl']:.4f} vs {f['kl']:.4f} ({p['kl'] / f['kl']:.2f}x; served positions {p['kl_served']:.4f} vs "
+          f"{f['kl_served']:.4f}); long key {p['long']['all']:.4f} vs {f['long']['all']:.4f} "
+          f"({p['long']['all'] / f['long']['all']:.2f}x)",
+          p["kl"] <= POLICY_GAIN * f["kl"] and p["long"]["all"] <= POLICY_GAIN * f["long"]["all"])
 if "fp32-scale" in summary:
     b, f = summary["int4", torch.bfloat16], summary["fp32-scale"]
     check(f"int4, bf16 KV: the served embedding scale 50.5 (bf16) vs 50.596 (fp32, the key's): KL vs the key "
@@ -205,22 +200,8 @@ if peaks:                                                   # Metal aborts comma
     worst = max(peaks, key=peaks.get)                       # 0.95: where MLX starts freeing its cache
     check(f"GPU memory: every run stays under 0.95 x Metal's recommended {rec / 2**30:.2f} GiB (highest: {worst[0]}, "
           f"{str(worst[1])[6:]} KV, {peaks[worst] / 2**30:.2f} GiB)", all(p <= 0.95 * rec for p in peaks.values()))
-# Metal logs every command buffer it aborts (torch 2.14 never reads their status, so nothing else says so)
-ABORT = "Execution of the command buffer was aborted"
-try:
-    log = subprocess.run(["/usr/bin/log", "show", "--start", started, "--style", "compact", "--predicate",
-                          f'processID == {os.getpid()} AND eventMessage CONTAINS "{ABORT}"'],
-                         capture_output=True, text=True, timeout=300)
-    rc, err, out = log.returncode, log.stderr.strip(), log.stdout
-except subprocess.TimeoutExpired:
-    rc, err, out = None, "timed out after 300 s", ""
-if rc != 0:                                                 # it needs an admin account and no sandbox
-    check(f"Metal aborted no command buffer of this process: macOS's log not readable (log show: {rc}, "
-          f"{err[:150]})", False)
-else:
-    aborts = [line.split(ABORT)[-1].strip() for line in out.splitlines() if ABORT in line]
-    check(f"Metal aborted no command buffer of this process (macOS log: {len(aborts)}"
-          + (f", e.g. {aborts[0][:90]})" if aborts else ")"), not aborts)
+ok, what = metal_aborts(started)                            # torch 2.14 never reads a command buffer's status
+check(f"Metal aborted no command buffer of this process ({what})", ok)
 print(f"      {time.perf_counter() - t0:.0f} s in all")
 
 print(f"\n{sum(results)}/{len(results)} passed")

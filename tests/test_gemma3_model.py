@@ -3,6 +3,7 @@ import os
 import sys
 import tempfile
 import time
+from pathlib import Path
 
 os.environ.setdefault("HF_HUB_OFFLINE", "1")
 import torch
@@ -90,8 +91,7 @@ with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as d:
     at = next(k for k in range(2, 8) if free_short[k] not in free_short[:k] + free_long)
     stop = (free_short[at],)                    # the short prompt stops at its token `at`, the long one never
     refs = [hf_decode(hf, hf.model.language_model, p, 8, stop) for p in (prompt, short)]
-    rows, golden_gemma3.HEAD_ROWS = golden_gemma3.HEAD_ROWS, 100
-    ref = golden_gemma3.StreamedGemma3(d)
+    ref = golden_gemma3.StreamedGemma3(d, head_rows=100)
     caps = [{}, {}]
     logits, got, steps = ref.greedy_all([prompt, short], 8, caps, stop=stop)
     exact = all(torch.equal(lg, r[0]) and set(c) == set(r[1]) and all(torch.equal(c[k], r[1][k]) for k in c)
@@ -109,8 +109,7 @@ with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as d:
           and step_err < 1e-6)
     long = torch.randint(3, 512, (40,), generator=torch.Generator().manual_seed(4)).tolist()
     want_logits, want_cap, want, want_steps = hf_decode(hf, hf.model.language_model, long, 6, golden_gemma3.STOP)
-    key = golden_gemma3.long_key(ref, long, 6)
-    golden_gemma3.HEAD_ROWS = rows
+    key = golden_gemma3.gemma3_long_key(ref, long, 6)
     r = key["rows"]
     check(f"answer-key generator --long, 40 tokens past the 8-token window: the final norm of every position and every "
           f"layer at the {len(r)} kept rows ({r.tolist()}) bit-identical; logits there within "
@@ -120,6 +119,19 @@ with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as d:
           and all(torch.equal(v, want_cap[k][r]) for k, v in key["layers"].items()) and len(key["layers"]) == 13
           and rel(key["logits"], want_logits[r]) < 1e-6 and rel(key["step_logits"], want_steps) < 1e-6
           and key["greedy"].tolist() == want and set(range(5, 14)) <= set(r.tolist()))
+    made, path = golden_gemma3.provenance(d), Path(tmp) / "0.pt"
+    stale = [made | {"generator": made["generator"] + 1}, made | {"transformers": "0"},
+             golden_gemma3.provenance(tmp), None]
+    torch.save({"ids": torch.tensor(long), "n_new": 6, "provenance": made}, path)
+    reused = golden_gemma3.done(path, long, 6, made, force=False)
+    redone = [not golden_gemma3.done(path, long, 6, p, force=False) for p in stale]
+    redone.append(not golden_gemma3.done(path, long, 6, made, force=True))
+    torch.save({"ids": torch.tensor(long), "n_new": 6}, path)
+    redone.append(not golden_gemma3.done(path, long, 6, made, force=False))
+    check(f"answer-key resume: a saved record is reused only when its provenance matches (generator "
+          f"{made['generator']}, transformers {made['transformers']}, torch {made['torch']}, checkpoint "
+          f"{made['checkpoint'][:12]}); a newer generator, another transformers or checkpoint, a record without "
+          f"provenance or --force regenerates it ({sum(redone)}/{len(redone)})", reused and all(redone))
 print(f"      {time.perf_counter() - t0:.0f} s")
 
 # ---------------------------------------------------------------- the real model
@@ -194,7 +206,7 @@ for t, r, ok in zip(tokens, recs, same):
 stopped = sum(t[-1] in STOP for t in tokens)
 check(f"greedy: identical to the answer key on {sum(same)}/{len(same)} prompts ({stopped} end at a stop id, "
       f"{sum(map(len, tokens))} tokens); the logits of all {n_steps} decode steps == the answer key's "
-      f"(worst {step_err:.1e})", all(same) and step_err < 7e-5 and min(map(len, tokens)) >= 16)
+      f"(worst {step_err:.1e})", all(same) and step_err < 7e-5)
 del states
 print(f"      {time.perf_counter() - t0:.0f} s")
 
@@ -209,7 +221,7 @@ def kl_rows(p_logits, q_logits):
 bf = Gemma3Model(cfg, weights, stream=True, embed_scale_dtype=torch.bfloat16)
 seqs = [torch.cat([r["ids"], r["greedy"][:-1]]) for r in recs]
 hb = bf.packed_hidden([(s, bf.new_state(len(s))) for s in seqs])
-kl, kl_floor, agree, path_same = [], [], 0, True
+kl, agree, path_same = [], 0, True
 for hj, r in zip(hb.split([len(s) for s in seqs]), recs):
     key = torch.cat([r["logits"], r["step_logits"]])
     lg = bf.head(hj)

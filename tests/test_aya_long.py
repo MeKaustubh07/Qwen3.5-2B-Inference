@@ -42,11 +42,8 @@ model = Cohere2Model(cfg, open_weights(f"{D}/model.safetensors.index.json"), str
 import long_texts
 from tokenizers import Tokenizer as HFTokenizer
 hf_tok = HFTokenizer.from_file(f"{D}/tokenizer.json")
-class HFEnc:
-    @staticmethod
-    def encode(text):
-        return hf_tok.encode(text, add_special_tokens=False).ids
-text = long_texts.build(HFEnc, key["tokens_per_language"])
+hf_encode = lambda text: hf_tok.encode(text, add_special_tokens=False).ids
+text = long_texts.build(hf_encode, key["tokens_per_language"])
 check(f"ids from the engine's tokenizer == the key's for the {n}-token text in {len(key['languages'])} languages "
       f"({', '.join(key['languages'])})", tok.encode(text, add_bos=True) == ids.tolist())
 

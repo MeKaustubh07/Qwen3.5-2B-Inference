@@ -24,6 +24,7 @@ MAKE = {"tiny-aya-global": "scripts/golden_aya.py", "sarvam-translate": "scripts
 PACK_TOKENS = 512                   # tokens per packed prefill of a rows reference
 HEAD_ROWS, KL_ROWS = 128, 16        # rows through the head at a time; rows of 262K-wide KL temporaries at a time
 CURVE = (1, 2, 4, 8, 16, 24, 32, 48, 64, 80, 96, 112)    # prefixes of the per-byte ranking measured
+BOOTSTRAP = 2000                    # resamples of the prompts behind the rule's choice
 
 
 def kl_scores(model, goldens, vocab):
@@ -141,6 +142,27 @@ def breakdown(per_prompt: dict, prompts: list[dict]) -> dict:
     return {k: round(mean_kl(per_prompt, v), 5) for k, v in sorted(groups.items())}
 
 
+def rule_choice(points: list[dict], kls: list[float]) -> int:
+    """The rule: keep the next prefix of the ranking while its KL drop per extra byte is at least the average of going
+    all INT8 (points: the curve, its last the all-INT8 endpoint; kls: their KL) -> the prefix length kept."""
+    rate = (kls[0] - kls[-1]) / points[-1]["extra_bytes"]
+    chosen = 0
+    for (prev, k0), (nxt, k1) in zip(zip(points, kls), zip(points[1:], kls[1:])):
+        if (k0 - k1) / (nxt["extra_bytes"] - prev["extra_bytes"]) < rate:
+            break
+        chosen = nxt["n"]
+    return chosen
+
+
+def choice_spread(points: list[dict], per_point: list[dict], prompts: list[dict], seed: int = 0) -> dict:
+    """How often the rule picks each prefix when the prompts are resampled with replacement -> {n: share}."""
+    g, counts = np.random.default_rng(seed), defaultdict(int)
+    for _ in range(BOOTSTRAP):
+        sample = [prompts[i] for i in g.integers(0, len(prompts), len(prompts))]
+        counts[rule_choice(points, [mean_kl(r, sample) for r in per_point])] += 1
+    return {n: round(c / BOOTSTRAP, 3) for n, c in sorted(counts.items())}
+
+
 def extra_bytes(w: QuantTensor) -> int:
     """What keeping w INT8 costs over INT4: INT8 1 B + an fp16 scale per 32 weights, INT4 0.5 B + scale and min."""
     n = w.shape[0] * w.shape[1]
@@ -178,7 +200,9 @@ def calibrate_rows(a, ref_dir: Path, out: str) -> None:
     ref_sha = hashlib.sha256((ref_dir / "index.json").read_bytes()).hexdigest()
     state_path = ROOT / "build" / "calibrate" / f"{a.model}.json"
     state = json.load(open(state_path)) if state_path.exists() else {}
-    run = {"reference_sha256": ref_sha, "split": a.split, "pack_tokens": PACK_TOKENS}
+    calib_sha = hashlib.sha256(json.dumps([{k: v for k, v in p.items() if k != "i"} for p in calib],
+                                          ensure_ascii=False).encode()).hexdigest()
+    run = {"calib_sha256": calib_sha, "split": a.split, "pack_tokens": PACK_TOKENS}   # what the damage depends on
     if any(state.get(k) != v for k, v in run.items()):             # damage measured otherwise: start again
         state = {"reference": str(ref_dir)} | run | {"damage": {}}
     state_path.parent.mkdir(parents=True, exist_ok=True)
@@ -216,28 +240,35 @@ def calibrate_rows(a, ref_dir: Path, out: str) -> None:
     damage = state["damage"]
     ranked = sorted(keys, key=lambda k: -damage[k] / size[k])
     every = frozenset(policy_group(k) for k in keys)
-    curve, kls = [], []
+    curve, per_point = [], []
     for n in [0] + [n for n in CURVE if n < len(keys)]:
         mixed.int4 = every - {policy_group(k) for k in ranked[:n]}
-        r = rows_kl(m, Streamed(m, prompts), ref_dir, vocab)
-        kls.append(mean_kl(r, calib))
-        curve.append(dict(n=n, extra_bytes=sum(size[k] for k in ranked[:n]), kl=round(kls[-1], 5),
-                          by=breakdown(r, prompts)))
-        print(f"top {n} INT8 (+{curve[-1]['extra_bytes'] / 1e6:.0f} MB): KL {kls[-1]:.5f}  "
+        per_point.append(rows_kl(m, Streamed(m, prompts), ref_dir, vocab))
+        curve.append(dict(n=n, extra_bytes=sum(size[k] for k in ranked[:n]), kl=round(mean_kl(per_point[-1], calib), 5),
+                          by=breakdown(per_point[-1], prompts)))
+        print(f"top {n} INT8 (+{curve[-1]['extra_bytes'] / 1e6:.0f} MB): KL {mean_kl(per_point[-1], calib):.5f}  "
               f"[{time.perf_counter() - t0:.0f} s]", flush=True)
-    kls.append(base_kl)                                           # every tensor INT8: the baseline
+    per_point.append(base)                                        # every tensor INT8: the baseline
     curve.append(dict(n=len(keys), extra_bytes=sum(size.values()), kl=round(base_kl, 5), by=breakdown(base, prompts)))
-    rate = (kls[0] - base_kl) / sum(size.values())                # the average KL per byte of going all INT8
-    chosen = 0
-    for (prev, k0), (nxt, k1) in zip(zip(curve, kls), zip(curve[1:], kls[1:])):
-        if (k0 - k1) / (nxt["extra_bytes"] - prev["extra_bytes"]) < rate:
-            break
-        chosen = nxt["n"]
+    rate = (mean_kl(per_point[0], calib) - base_kl) / sum(size.values())    # the average KL per byte of all INT8
+    chosen = rule_choice(curve, [mean_kl(r, calib) for r in per_point])
+    splits = sorted({p["split"] for p in prompts})
+    choice = {"chosen": {sp: rule_choice(curve, [mean_kl(r, [p for p in prompts if p["split"] == sp])
+                                                 for r in per_point]) for sp in splits},
+              "bootstrap": {sp: choice_spread(curve, per_point, [p for p in prompts if p["split"] == sp])
+                            for sp in splits},
+              "resamples": BOOTSTRAP}
+    picks = {n for spread in choice["bootstrap"].values() for n, share in spread.items() if share >= 0.1}
+    if len(set(choice["chosen"].values()) | picks) > 1:
+        choice["note"] = (f"not resolved by this data: the rule keeps {choice['chosen']} tensors by split, and "
+                          f"{sorted(picks)} each in 10%+ of the resamples; {a.split} decides")
+    print(f"the rule on each split: {choice['chosen']}; over {BOOTSTRAP} resamples of the prompts: "
+          f"{choice['bootstrap']}", flush=True)
     policy = {"model": a.model, "scheme": "int4", "rule": "KL per extra byte", "reference": str(ref_dir),
               "reference_sha256": ref_sha, "split": a.split, "baseline_kl_int8": round(base_kl, 5),
               "average_kl_per_mb": round(rate * 1e6, 7),
               "keep_int8": sorted(ranked[:chosen]), "always_int8": ["embed_tokens.weight"],
-              "curve": curve,
+              "choice": choice, "curve": curve,
               "damage": {k: {"kl": damage[k], "extra_bytes": size[k], "kl_per_mb": round(damage[k] / size[k] * 1e6, 7)}
                          for k in ranked}}
     json.dump(policy, open(out, "w"), indent=1, ensure_ascii=False)

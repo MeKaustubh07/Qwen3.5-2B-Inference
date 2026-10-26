@@ -98,29 +98,115 @@ def metal_aborts(since: str) -> int | None:
     return sum(abort in line for line in r.stdout.splitlines()) if r.returncode == 0 else None
 
 
+def gpu_peak() -> int:
+    """GPU memory high point since the last reset: the allocator's peak heap bytes, plus what Metal holds outside them."""
+    torch.mps.synchronize()
+    A = torch.accelerator
+    return A.max_memory_reserved() + max(0, torch.mps.driver_allocated_memory() - A.memory_reserved())
+
+
 def decide_bench(eng, ctx_len: int, n_opts: int, opt_tokens: int, kv_blocks: int) -> str:
     """One /v1/decide-sized scoring call beside the server's pool: the context's cache and its forks live outside it."""
     from decision import score_options
-    model, tok, A = eng.model, eng.tokenizer, torch.accelerator
+    model, tok = eng.model, eng.tokenizer
     pool = model.new_paged_pool(kv_blocks, 16, max_seqs=8, max_chunk=512)
     st = model.new_paged_state(pool)
     model.forward_packed([(torch.tensor([0]), st)])          # warm-up, as Scheduler._warmup
     st.free()
-    g = torch.Generator().manual_seed(0)                       # ordinary tokens, clear of the special ids
-    opts = [torch.randint(1000, 100000, (opt_tokens,), generator=g).tolist() for _ in range(n_opts)]
-    ctx = prompt_ids(tok, ctx_len)
-    torch.mps.synchronize()
-    A.reset_peak_memory_stats()
+    ctx, opts = prompt_ids(tok, ctx_len), option_ids(n_opts, opt_tokens)
+    torch.accelerator.reset_peak_memory_stats()
     since, t0 = time.strftime("%Y-%m-%d %H:%M:%S"), time.perf_counter()
-    scores = score_options(model, ctx, opts, tok.vocab_size())
-    torch.mps.synchronize()
+    scores = score_options(model, ctx, opts, tok.vocab_size(), budget=fork_budget(eng))
+    peak = gpu_peak()
     secs = time.perf_counter() - t0
-    peak = A.max_memory_reserved() + max(0, torch.mps.driver_allocated_memory() - A.memory_reserved())
     rec = torch.mps.recommended_max_memory()
     return (f"/v1/decide, {len(ctx)}-token context, {n_opts} options x {opt_tokens} tokens, pool of {kv_blocks} "
             f"blocks: peak GPU memory {peak / 2**30:.2f} GiB ({peak / rec:.2f}x Metal's recommended {rec / 2**30:.2f}), "
             f"{secs:.1f} s, Metal aborts {metal_aborts(since)}\n"
             f"scores {[repr(s.logprob) for s in scores]}")
+
+
+def option_ids(n: int, tokens: int) -> list[list[int]]:
+    g = torch.Generator().manual_seed(0)                       # ordinary tokens, clear of the special ids
+    return [torch.randint(1000, 100000, (tokens,), generator=g).tolist() for _ in range(n)]
+
+
+def fork_budget(eng) -> int:
+    from decision import FORK_BUDGET
+    return FORK_BUDGET if eng.fork_budget is None else eng.fork_budget
+
+
+def fork_boundary(model, cap: int, opt_tokens: int, budget: int) -> int | None:
+    """The longest /v1/decide context under `cap` whose options are scored on 2+ forks at once (decision.py's group):
+    the forks' copies can outweigh the longer context scored in place, so the peak is not monotone in the length."""
+    from decision import _fork_bytes
+    b1, b2 = (_fork_bytes(model.new_state(n)) for n in (1, 2))
+    fork = lambda n: b1 + (b2 - b1) * (n - 1)                 # the state's bytes are linear in its length
+    group = lambda ctx: max(1, budget // fork(ctx + opt_tokens))
+    if group(cap - opt_tokens) > 1:
+        return None
+    return next((n for n in range(cap - opt_tokens, 0, -1) if group(n) > 1), None)
+
+
+def serve_mix(eng, kv_blocks: int, max_len: int, decide_len: int, repeats: int, n_opts: int, opt_tokens: int,
+              out: str | None) -> list[dict]:
+    """Server-shaped GPU memory, every workload in ONE process, as a long-running server meets them: the pool and
+    warm-up of Scheduler, generation at the length cap (512-token forward_packed chunks, then decode_batch), /v1/decide
+    at its cap and at the fork boundary below it, then each decide interleaved with a generation's prefill the way
+    Scheduler._loop runs them (one decide step, then one prefill chunk). Each phase `repeats` times; the allocator keeps
+    what it cached throughout. -> one record per phase run (also appended to `out` as JSON lines as they finish)."""
+    import json
+    from decision import score_options_steps
+    model, tok, rec = eng.model, eng.tokenizer, torch.mps.recommended_max_memory()
+    pool = model.new_paged_pool(kv_blocks, 16, max_seqs=8, max_chunk=512)
+    states = [model.new_paged_state(pool) for _ in range(2)]
+    model.forward_packed([(torch.tensor([0]), st) for st in states])
+    model.decode_batch([0, 0], states)
+    for st in states:
+        st.free()
+    n_new, opts = 16, option_ids(n_opts, opt_tokens)
+    gen_ids = torch.tensor(prompt_ids(tok, max_len - n_new))
+    budget = fork_budget(eng)
+    lens = [decide_len - opt_tokens] + [n for n in [fork_boundary(model, decide_len, opt_tokens, budget)] if n]
+
+    def generate(steps=None):
+        st = model.new_paged_state(pool)
+        for i in range(0, len(gen_ids), 512):
+            if steps is not None:
+                next(steps, None)
+            lg = model.forward_packed([(gen_ids[i:i + 512], st)])
+        for _ in steps or ():
+            pass
+        nxt = int(lg[0].argmax())
+        for _ in range(n_new):
+            nxt = int(model.decode_batch([nxt], [st])[0].argmax())
+        st.free()
+
+    def decide(n):
+        return score_options_steps(model, prompt_ids(tok, n), opts, tok.vocab_size(), budget=budget)
+
+    phases = [(f"generate {len(gen_ids)}+{n_new}", generate)]
+    phases += [(f"decide {n}+{opt_tokens} ({n_opts} options)", lambda n=n: [*decide(n)]) for n in lens]
+    phases += [(f"generate {len(gen_ids)}+{n_new} after decide", generate)]
+    phases += [(f"decide {n}+{opt_tokens} interleaved with generate {len(gen_ids)}", lambda n=n: generate(decide(n)))
+               for n in lens]
+    records = []
+    for label, fn in phases:
+        for r in range(repeats):
+            torch.mps.synchronize()
+            torch.accelerator.reset_peak_memory_stats()
+            t0 = time.perf_counter()
+            fn()
+            peak = gpu_peak()
+            records.append(dict(phase=label, run=r + 1, peak=peak, ratio=round(peak / rec, 4),
+                                secs=round(time.perf_counter() - t0, 1)))
+            print(f"{label}, run {r + 1}: GPU peak {peak / 2**30:.2f} GiB ({peak / rec:.3f}x Metal's recommended "
+                  f"{rec / 2**30:.2f}), {records[-1]['secs']} s", flush=True)
+            if out:
+                with open(out, "a") as f:
+                    f.write(json.dumps(records[-1] | dict(kv_blocks=kv_blocks, max_len=max_len,
+                                                          decide_len=decide_len, recommended=rec)) + "\n")
+    return records
 
 
 def prompt_ids(tok: Tokenizer, n: int) -> list[int]:
@@ -211,6 +297,12 @@ def main() -> None:
     ap.add_argument("--decide", type=int, default=0, help="a /v1/decide scoring call over this many context tokens")
     ap.add_argument("--options", type=int, default=16, help="--decide: options (the API allows 16)")
     ap.add_argument("--option-tokens", type=int, default=64, help="--decide: tokens per option (the API allows 64)")
+    ap.add_argument("--serve-mix", action="store_true",
+                    help="server-shaped GPU memory in one process: generation at the length cap, /v1/decide at its "
+                         "cap (--decide overrides it: context + option) and fork boundary, and both interleaved (the registry's "
+                         "budgets unless overridden)")
+    ap.add_argument("--max-len", type=int, default=0, help="--serve-mix: generation length (default: the registry's)")
+    ap.add_argument("--repeats", type=int, default=2, help="--serve-mix: runs of each phase")
     ap.add_argument("--out", default=None)
     a = ap.parse_args()
     if a.new < 2:
@@ -221,6 +313,22 @@ def main() -> None:
     sync = torch.mps.synchronize if backend.device.type == "mps" else (lambda: None)
     if a.kv_report:
         print("\n".join(kv_report(model, a.prefill_chunk or 512)) + "\n")
+    if a.serve_mix:
+        if backend.device.type != "mps":
+            ap.error("--serve-mix measures GPU memory: use a Metal backend")
+        max_len = a.max_len or eng.max_model_len
+        since = time.strftime("%Y-%m-%d %H:%M:%S")
+        rows = serve_mix(eng, a.kv_blocks or eng.kv_blocks or 1024, max_len, a.decide or eng.decide_max_len or max_len,
+                         a.repeats, a.options, a.option_tokens, a.out)
+        worst, rec = max(rows, key=lambda r: r["peak"]), torch.mps.recommended_max_memory()
+        aborts = metal_aborts(since)
+        print(f"worst: {worst['phase']}, {worst['peak'] / 2**30:.2f} GiB ({worst['ratio']:.3f}x; 0.95x = "
+              f"{0.95 * rec / 2**30:.2f} GiB); Metal aborts {aborts}")
+        if a.out:
+            import json
+            with open(a.out, "a") as f:
+                f.write(json.dumps(dict(phase="end", worst=worst["peak"], recommended=rec, aborts=aborts)) + "\n")
+        return
     if a.decide:
         if backend.device.type != "mps":
             ap.error("--decide measures GPU memory: use a Metal backend")

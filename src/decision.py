@@ -179,9 +179,10 @@ def prepare(engine, kind: str, context: str, question: str, options: list[str] |
 def score_steps(engine, kind: str, options: list[str], ctx: list[int], opt_ids: list[list[int]],
                 length_normalize: bool = True, embeddings: bool = False, chunk: int = PREFILL_CHUNK):
     """Generator form of score: the model work for a prepared question (run it on the thread that owns the GPU)."""
-    vocab = engine.tokenizer.vocab_size()
-    scores = yield from score_options_steps(engine.model, ctx, opt_ids, vocab, embeddings, chunk=chunk,
-                                            boundary=boundary_mask(engine.tokenizer, vocab))
+    vocab, budget = engine.tokenizer.vocab_size(), getattr(engine, "fork_budget", None)
+    scores = yield from score_options_steps(engine.model, ctx, opt_ids, vocab, embeddings,
+                                            FORK_BUDGET if budget is None else budget, chunk,
+                                            boundary_mask(engine.tokenizer, vocab))
     key = torch.tensor([s.mean_logprob if length_normalize else s.logprob for s in scores], dtype=torch.float64)
     # normalize over the scores sorted by value: a sum's rounding depends on its order, so this keeps the
     # probabilities, like the scores, bit-identical however the options are ordered

@@ -179,6 +179,23 @@ def gpu_peak() -> int:
     return A.max_memory_reserved() + max(0, torch.mps.driver_allocated_memory() - A.memory_reserved())
 
 
+def free_gpu() -> None:
+    gc.collect()
+    torch.mps.empty_cache()
+
+
+def kl(ref: torch.Tensor, ours: torch.Tensor, vocab: int) -> torch.Tensor:
+    """KL(ref || ours) per row over the first `vocab` logits, in float64 on the CPU."""
+    lp, lq = torch.log_softmax(ref[:, :vocab].double(), -1), torch.log_softmax(ours[:, :vocab].double(), -1)
+    return (lp.exp() * (lp - lq)).sum(-1)
+
+
+def top2_gap(logits: torch.Tensor, vocab: int) -> torch.Tensor:
+    """Top-1 minus top-2 logit per row: where it is small, a rounding change may flip the argmax."""
+    t = logits[:, :vocab].topk(2, -1).values
+    return t[:, 0] - t[:, 1]
+
+
 ABORT = "Execution of the command buffer was aborted"
 
 

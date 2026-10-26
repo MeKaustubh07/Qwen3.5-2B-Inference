@@ -33,10 +33,7 @@ ids, n, W = key["ids"], len(key["ids"]), 4096
 tok = Tokenizer(f"{D}/tokenizer.json")
 from tokenizers import Tokenizer as HFTokenizer
 hf_tok = HFTokenizer.from_file(f"{D}/tokenizer.json")
-class HFEnc:
-    @staticmethod
-    def encode(text):
-        return hf_tok.encode(text, add_special_tokens=False).ids
+hf_encode = lambda text: hf_tok.encode(text, add_special_tokens=False).ids
 
 
 # 1. past the window, against the key: INT8 and INT4, fp32 and bf16 KV
@@ -110,7 +107,7 @@ if ("int8", torch.bfloat16) in summary and ("int8", torch.float32) in summary:
 # and a bf16 KV state in lockstep; KL(fp32 KV || bf16 KV) at every 64th row, around the window's edge and at the last
 # 8, then 32 greedy tokens from each. No fp32 answer key reaches this far, so this is engine against engine
 if ("int4", torch.bfloat16) in summary:
-    long_ids = torch.tensor(tok.encode(long_texts.build(HFEnc, 950), add_bos=True))
+    long_ids = torch.tensor(tok.encode(long_texts.build(hf_encode, 950), add_bos=True))
     N = len(long_ids)
     pick = torch.tensor(sorted(set(range(0, N, 64)) | set(range(W - 6, W + 5)) | set(range(N - 8, N))))
     out, gen = {}, {}

@@ -89,23 +89,23 @@ def section(lang: str) -> str:
     return text[text.index(start):] if isinstance(start, str) else text[start:]
 
 
-def parts(tok, n: int, langs=tuple(SOURCES)) -> list[str]:
-    """About n tokens of each language: the shortest prefix of its section reaching n tokens with tok.encode, in the
-    order of SOURCES. tok: anything with encode(text) -> list of ids."""
+def parts(encode, n: int, langs=tuple(SOURCES)) -> list[str]:
+    """About n tokens of each language: the shortest prefix of its section reaching n tokens with encode(text) -> ids,
+    in the order of SOURCES."""
     out = []
     for lang in langs:
         text = section(lang)
         lo, hi = 1, len(text)
         while lo < hi:
             mid = (lo + hi) // 2
-            lo, hi = (mid + 1, hi) if len(tok.encode(text[:mid])) < n else (lo, mid)
+            lo, hi = (mid + 1, hi) if len(encode(text[:mid])) < n else (lo, mid)
         out.append(text[:lo].strip())
     return out
 
 
-def build(tok, n: int, langs=tuple(SOURCES)) -> str:
+def build(encode, n: int, langs=tuple(SOURCES)) -> str:
     """parts(), joined by blank lines: one long multilingual text."""
-    return "\n\n".join(parts(tok, n, langs))
+    return "\n\n".join(parts(encode, n, langs))
 
 
 def main() -> None:
@@ -114,15 +114,11 @@ def main() -> None:
     a = ap.parse_args()
     from tokenizers import Tokenizer
     hf = Tokenizer.from_file(str(ROOT / "models/tiny-aya-global/tokenizer.json"))
-
-    class Tok:
-        @staticmethod
-        def encode(text):
-            return hf.encode(text, add_special_tokens=False).ids
-    ps = parts(Tok, a.tokens_per_language)
+    encode = lambda text: hf.encode(text, add_special_tokens=False).ids
+    ps = parts(encode, a.tokens_per_language)
     for lang, part in zip(SOURCES, ps):
-        print(f"{lang}: {len(Tok.encode(part))} tokens, {len(part)} characters | {SOURCES[lang][1]}")
-    print(f"all: {len(Tok.encode(build(Tok, a.tokens_per_language)))} tokens")
+        print(f"{lang}: {len(encode(part))} tokens, {len(part)} characters | {SOURCES[lang][1]}")
+    print(f"all: {len(encode(build(encode, a.tokens_per_language)))} tokens")
 
 
 if __name__ == "__main__":

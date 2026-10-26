@@ -53,20 +53,24 @@ MODELS = {
     # is 15.5 GB in fp32, 7.8 GB in bf16). model_kwargs: bf16 KV (136 KiB per token over 34 layers); the embedding
     # scaled by sqrt(2560) rounded to bf16 (50.5), as transformers computes it with the checkpoint's bf16 weights.
     # kv_blocks: the server's pool, 320 blocks of every layer = 680 MiB of bf16 KV (two 8K sequences: 317, the sliding
-    # layers' rings counted). GPU peaks measured as the server runs (forward_packed in 512-token chunks, then
-    # decode_batch; three runs in one process; Metal's recommended working set 5.33 GiB, kept under 0.95x): INT4 (the
-    # calibrated policy, 2.99 GB) with an 8K prompt 4.40 GiB. INT8's weights are 4.12 GB: an 8K prompt beside a
-    # 160-block pool reached 5.05 GiB on its second run, so INT8 serves at most 4096 tokens from 241 blocks (two 4K
-    # sequences): 4.79 GiB. /v1/decide holds its context outside the pool (16 options x 64 tokens): INT4 at 8K 5.47
-    # GiB, at 6K 4.84, so INT4 decides take at most 6144 tokens; INT8 at 4K 5.34, 3K 5.14, 2K 4.97, so at most 2048.
+    # layers' rings counted). fork_budget 0: /v1/decide scores its options on the context's own state, rewound, never
+    # on forks: a state holds all 34 layers' KV at its full length (136 KiB per token), and forking a short context
+    # (2 forks at 899 tokens) beside a generation's prefill took INT8 to 1.04x. Budgets: every workload of a long-running
+    # server in one process, the allocator's cache kept, each twice (scripts/bench.py --serve-mix; gated by
+    # tests/test_gemma3_serve_memory.py at 0.95x of the 5.33 GiB Metal recommends): generation at the cap in 512-token
+    # chunks, /v1/decide at its cap (16 options x 64 tokens, its context outside the pool), and decide interleaved with
+    # that generation's prefill as Scheduler._loop runs them, the highest. INT4 (the calibrated policy, 2.99 GB):
+    # 8K generation 0.83x; decide at 6144 interleaved 0.98x, at 4096 0.91x, so INT4 decides take at most 4096 tokens.
+    # INT8 (4.12 GB): an 8K prompt beside a 160-block pool reached 0.95x, so INT8 serves at most 4096 tokens from 241
+    # blocks (two 4K sequences): 0.90x; decide at 2048 interleaved 0.96x, at 1024 0.93x, so at most 1024.
     "sarvam-translate": dict(dir="models/sarvam-translate", family="gemma3", weights="model.safetensors.index.json",
                              eos=[1, 106], chat="template", policy="configs/quant/sarvam-translate.json",
                              sampling=dict(temperature=0.01, top_p=0.95, top_k=64, repetition_penalty=1.0),
                              max_model_len=8192, backends=("metal-int8", "metal-int4"),
                              model_kwargs=dict(kv_dtype=torch.bfloat16, embed_scale_dtype=torch.bfloat16),
-                             kv_blocks=320, per_backend={"metal-int8": dict(max_model_len=4096, kv_blocks=241,
-                                                                            decide_max_len=2048),
-                                                         "metal-int4": dict(decide_max_len=6144)}),
+                             kv_blocks=320, fork_budget=0,
+                             per_backend={"metal-int8": dict(max_model_len=4096, kv_blocks=241, decide_max_len=1024),
+                                          "metal-int4": dict(decide_max_len=4096)}),
 }
 FAMILIES = {"qwen3_5": (Qwen35Config, Qwen35Model),          # family -> (config class, model class)
             "cohere2": (Cohere2Config, Cohere2Model),
@@ -85,6 +89,7 @@ class Engine:
     thinking: bool = False                     # the model has a reasoning mode (Qwen3.5: <think> ... </think>)
     kv_blocks: int | None = None               # the server's default KV pool, in blocks of every layer (None: 1024)
     decide_max_len: int | None = None          # /v1/decide's limit on context + option, if below max_model_len
+    fork_budget: int | None = None             # /v1/decide's bytes of forked states at once (None: decision.py's)
 
 
 def chat_style(spec: dict, d: Path) -> str | TemplateChat:
@@ -127,4 +132,4 @@ def load_engine(name: str, backend: str = "metal", weights_file: str | None = No
     caps = [c for c in (spec.get("max_model_len"), getattr(model, "max_positions", None)) if c]
     return Engine(name, model, tok, set(spec["eos"]), chat_style(spec, d), spec["sampling"],
                   min(caps) if caps else None, spec.get("thinking", False), spec.get("kv_blocks"),
-                  spec.get("decide_max_len"))
+                  spec.get("decide_max_len"), spec.get("fork_budget"))

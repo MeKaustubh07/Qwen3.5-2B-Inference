@@ -10,9 +10,8 @@ from transformers import AutoTokenizer
 from transformers.cache_utils import DynamicCache
 from transformers.models.gemma3.modeling_gemma3 import Gemma3DecoderLayer, Gemma3RMSNorm, Gemma3RotaryEmbedding
 
-from streamed_hf import StreamedDecoder
+from streamed_hf import StreamedDecoder, long_key, long_rows, provenance
 
-HEAD_ROWS = 32768                       # rows of the tied head widened to fp32 at a time (320 MB at hidden 2560)
 STOP = (1, 106)                         # <eos>, <end_of_turn> (generation_config.json)
 N_NEW = 40                              # greedy tokens per prompt at most
 SYSTEM = "Translate the text below to {}."           # the model card's prompt
@@ -22,8 +21,8 @@ class StreamedGemma3(StreamedDecoder):
     """transformers' Gemma 3 text forward pass with one decoder layer in memory at a time."""
     layer_class = Gemma3DecoderLayer
 
-    def __init__(self, model_dir: str):
-        super().__init__(model_dir, prefixes=("language_model.model.", "model."))
+    def __init__(self, model_dir: str, **kw):
+        super().__init__(model_dir, prefixes=("language_model.model.", "model."), **kw)
         c = self.config
         if c.final_logit_softcapping is not None:
             raise ValueError(f"final_logit_softcapping {c.final_logit_softcapping}: the answer key has no softcap")
@@ -40,7 +39,7 @@ class StreamedGemma3(StreamedDecoder):
         return {t: self.rotary(h, position_ids, t) for t in set(self.config.layer_types)}
 
     def head(self, h: torch.Tensor) -> torch.Tensor:
-        return self.tied_head(h, HEAD_ROWS)
+        return self.tied_head(h)
 
 
 TRANSLATE = [  # (target language, source text)
@@ -70,52 +69,37 @@ def chat_ids(tok, target: str, text: str) -> list[int]:
     return list(tok.apply_chat_template(messages(target, text), tokenize=True, add_generation_prompt=True)["input_ids"])
 
 
-def long_rows(n: int, window: int) -> list[int]:
-    """The rows the long key keeps logits and layer outputs of: every 64th, the window's edge, the last 8."""
-    return sorted(set(range(0, n, 64)) | set(range(window - 6, min(window + 7, n))) | set(range(max(0, n - 8), n)))
-
-
-def long_key(ref: StreamedDecoder, ids: list[int], n_new: int, log=None) -> dict:
-    """One prompt prefilled in one pass, then greedy until a stop id or n_new tokens -> the --long record."""
-    cap = {}
-    _, (greedy,), (steps,) = ref.greedy_all([ids], n_new, [cap], keep_from=[len(ids) - 1], stop=STOP, log=log)
-    rows = long_rows(len(ids), ref.config.sliding_window)
-    layers = {k: v[rows].clone() for k, v in cap.items() if k != "final_norm"}
-    return {"ids": torch.tensor(ids), "final_norm": cap["final_norm"], "rows": torch.tensor(rows),
-            "logits": ref.head(cap["final_norm"][rows]), "layers": layers, "greedy": torch.tensor(greedy),
-            "step_logits": steps}
+def gemma3_long_key(ref: StreamedGemma3, ids: list[int], n_new: int, log=None) -> dict:
+    """The --long record: one prefill pass, every layer kept at the rows, greedy until a stop id or n_new tokens."""
+    return long_key(ref, ids, n_new, long_rows(len(ids), ref.config.sliding_window), layers=True, stop=STOP, log=log)
 
 
 def peak_rss_gib() -> float:
     return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 2 ** 30          # bytes on macOS
 
 
-def done(path: Path, ids: list[int], n_new: int) -> bool:
-    """path holds a finished record for these ids and this many new tokens at most."""
-    if not path.exists():
+def done(path: Path, ids: list[int], n_new: int, made: dict, force: bool) -> bool:
+    """path holds a finished record for these ids and this many new tokens at most, made as `made` describes."""
+    if force or not path.exists():
         return False
     rec = torch.load(path, mmap=True)
-    return rec["ids"].tolist() == ids and rec.get("n_new") == n_new
+    return rec["ids"].tolist() == ids and rec.get("n_new") == n_new and rec.get("provenance") == made
 
 
-def main_long(d: str, out: Path) -> None:
+def main_long(d: str, out: Path, force: bool) -> None:
     import long_texts
-    tok = AutoTokenizer.from_pretrained(d)
-
-    class Enc:
-        @staticmethod
-        def encode(text):
-            return tok(text, add_special_tokens=False)["input_ids"]
-    text = long_texts.parts(Enc, LONG_TOKENS, (LONG_LANGUAGE,))[0]
+    tok, made = AutoTokenizer.from_pretrained(d), provenance(d)
+    text = long_texts.parts(lambda t: tok(t, add_special_tokens=False)["input_ids"], LONG_TOKENS, (LONG_LANGUAGE,))[0]
     ids = chat_ids(tok, "English", text)
-    if done(out / "0.pt", ids, LONG_NEW):
+    if done(out / "0.pt", ids, LONG_NEW, made, force):
         return print(f"{out / '0.pt'} is already done")
     ref = StreamedGemma3(d)
     if len(ids) <= ref.config.sliding_window + 128:
         raise SystemExit(f"{len(ids)} tokens: not far enough past the {ref.config.sliding_window}-token window")
     t0 = time.perf_counter()
-    rec = long_key(ref, ids, LONG_NEW, log=lambda m: print(f"  {time.perf_counter() - t0:5.0f} s  {m}", flush=True))
-    rec |= {"text": text, "target": "English", "source": long_texts.SOURCES[LONG_LANGUAGE][1], "n_new": LONG_NEW}
+    rec = gemma3_long_key(ref, ids, LONG_NEW, log=lambda m: print(f"  {time.perf_counter() - t0:5.0f} s  {m}", flush=True))
+    rec |= {"text": text, "target": "English", "source": long_texts.SOURCES[LONG_LANGUAGE][1], "n_new": LONG_NEW,
+            "provenance": made}
     torch.save(rec, out / "0.pt")
     print(f"{len(ids)} tokens, {len(rec['rows'])} rows -> {tok.decode(rec['greedy'])!r}")
     print(f"{time.perf_counter() - t0:.0f} s, peak RSS {peak_rss_gib():.2f} GiB")
@@ -155,7 +139,7 @@ def main_calib(d: str, out: Path) -> None:
 
 
 def main() -> None:
-    args = [a for a in sys.argv[1:] if a not in ("--long", "--calib")]
+    args, force = [a for a in sys.argv[1:] if a not in ("--long", "--calib", "--force")], "--force" in sys.argv
     d = args[0] if args else "models/sarvam-translate"
     if "--calib" in sys.argv:
         out = Path(args[1] if len(args) > 1 else "models/sarvam-translate-calib/ref")
@@ -164,13 +148,13 @@ def main() -> None:
     if "--long" in sys.argv:
         out = Path(args[1] if len(args) > 1 else "tests/golden_gemma3_long")
         out.mkdir(parents=True, exist_ok=True)
-        return main_long(d, out)
+        return main_long(d, out, force)
     out = Path(args[1] if len(args) > 1 else "tests/golden_gemma3")
     out.mkdir(parents=True, exist_ok=True)
-    tok = AutoTokenizer.from_pretrained(d)
+    tok, made = AutoTokenizer.from_pretrained(d), provenance(d)
     prompts = [(text, target, chat_ids(tok, target, text)) for target, text in TRANSLATE]
     prompts += [(text, None, tok(text)["input_ids"]) for text in RAW]
-    todo = [n for n, (*_, ids) in enumerate(prompts) if not done(out / f"{n}.pt", ids, N_NEW)]
+    todo = [n for n, (*_, ids) in enumerate(prompts) if not done(out / f"{n}.pt", ids, N_NEW, made, force)]
     if len(todo) < len(prompts):
         print(f"{len(prompts) - len(todo)} of {len(prompts)} prompts already done")
     if not todo:
@@ -181,7 +165,7 @@ def main() -> None:
     def save(j, lg, gr, st):
         n, (text, target, ids) = todo[j], prompts[todo[j]]
         torch.save({"text": text, "target": target, "chat": target is not None, "ids": torch.tensor(ids),
-                    "n_new": N_NEW, "greedy": torch.tensor(gr), "logits": lg.clone(), "step_logits": st.clone(),
+                    "n_new": N_NEW, "provenance": made, "greedy": torch.tensor(gr), "logits": lg.clone(), "step_logits": st.clone(),
                     **caps[j]}, out / f"{n}.pt")
         print(f"{n}: {len(ids)} tokens{f' -> {target}' if target else ' (raw)'}: {len(gr)} new "
               f"{'(stopped)' if gr[-1] in STOP else '(no stop)'} {tok.decode(gr)!r}", flush=True)

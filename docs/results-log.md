@@ -318,6 +318,82 @@ Plan: three independent plans and a judge (workflow wf_9e11ff20-55a), one step p
 | 2. speed vs llama.cpp and MLX-LM (`docs/bench/compare.md`, `raw/aya_speed/`) | measured 2026-10-11 00:35-01:09: two passes in opposite order, 90 s idle between engines (a first pass under memory pressure and heat was discarded). Single stream: MLX-LM 45 tok/s (~43 corrected for its timing), Q4_0 40-42, Q4_K_M 35-38, ours INT4 30 (INT8 20-23); effective bandwidth ~82-84 / 83 / 78 / 70 GB/s. Batch 8: Q4_0 70-74 (1.7-1.85x by batch 4, then flat), ours INT8 67-69, ours INT4 63-65 (nothing gained at batch 2), Q4_K_M 63, MLX-LM 49-50. Prefill 256: Q4_0 388-390, Q4_K_M 343-347, MLX-LM 261, ours 254-264. 100 in / 100 out: ours 28-29 tok/s decode, TTFT 568-578 ms; Q4_K_M 36-38 tok/s (tg100, from an empty context). Swap grew 1.7 -> 2.7 GiB over the run (INT8's 1024-token prefill 185 vs 267 tok/s between passes) |
 | 3. tokens per character (`lang_kl.py tpc`) | first 20,000 characters per language (all of hi's 16,300 and ja's 6,128): Qwen3.5 / Tiny Aya tokens 1.02x (en), 1.05 (fr), 1.04 (de), 1.01 (es), 1.29 (hi), 1.06 (ar), 0.93 (zh), 1.06 (ja) |
 
+## Porting Sarvam-Translate, M0-M1: everything before the model (2026-10-23/24; plan in `docs/sarvam-translate-plan.md`)
+
+| step | commit | result |
+|---|---|---|
+| plan | `6f1a79b` | every architecture fact checked against transformers 5.16.1 and the official small files at revision `e0a7a6bc`; the text model is 3,880,263,168 parameters (from the config); 439 of the checkpoint's 883 tensors are the vision tower, never read |
+| download | — | revision `e0a7a6bc`, pinned (ungated); SHA-256 of both shards == their Hugging Face LFS hashes (`24686ad5…` and `3cf079c7…`) |
+| tokenizer | `6f1a79b` | a SentencePiece mode beside byte-level BPE: the Replace normalizer, character-level BPE through the heap merge (a whole text is one chunk), byte fallback, a trie split of the 6,415 added tokens, decode with byte fusion. == HF on all 413 answer-key cases in 22 scripts (ids, ids with BOS, decode; 130 with byte fallback, the longest 20,000 characters), and transformers' `GemmaTokenizer` gives the same; 3,000 random texts and 3,000 random id lists 0 differ; 6 synthetic configurations x 19,607 strings 0 differ; 6 unimplemented configurations refused. The 20,000-character unspaced case in 14.8 ms (HF 5.1); 80,000 random characters 4.5x the first 20,000 (n log n ~4.6x). Qwen's and Tiny Aya's ids byte-identical |
+| config, loader | `6f1a79b` | `Gemma3Config` == transformers on all 12 fields and both RoPE tables for 5 configurations (incl. the real checkpoint's legacy `rope_scaling` keys); 16 settings the engine does not implement refused before any weight is read (softcapping, bidirectional attention, an untied head, yarn, ...); the text model under `language_model.model.` (444 tensors, the 15 kinds the engine reads); embedding scale 50.596443 in fp32, 50.5 in bf16 |
+| chat, registry | `6f1a79b` | the model's own template == `apply_chat_template` for one turn, the card's system + user prompt and a multi-turn chat (text and ids, one BOS from the template); roles out of order refused by both. Registry: stops `<eos>` 1 and `<end_of_turn>` 106, the card's temperature 0.01 with top-k 64 / top-p 0.95, cap 8192, Metal INT8 / INT4 only, bf16 KV |
+| streaming | `6f1a79b` | HF's ByteFallback decodes a run of byte tokens all or nothing, so a character already shown can turn into U+FFFD when the run goes on: the server and `generate_stream` now hold text back while the last token is a byte token (`Tokenizer.is_final`; byte-level BPE keeps the U+FFFD rule). Streams == HF's decode on 302 id lists of whole, cut and stray UTF-8 byte tokens |
+
+## Porting Sarvam-Translate, M2: the model on the CPU (2026-10-24)
+
+| check (`tests/test_gemma3.py`, random 12-layer Gemma 3 text models, fp32 CPU) | result |
+|---|---|
+| refactor | `AttentionDecoder` (`src/models/decoder.py`) extracted from `Cohere2Model`: 133 tensors bit-identical before and after; `Gemma3Model` is ~50 lines on it (sandwich norms, GeGLU, embedding scale, per-layer-type RoPE) |
+| ops | backend protocol v4: `gelu_tanh_mul` and fused `geglu` (CPU, Metal matvec), `rope(..., factor)` for linear scaling |
+| every layer and the logits vs HF `Gemma3ForCausalLM` | 14 captured tensors within 2.6e-6 relative, logits 1.9e-6; with transformers' own RMSNorm and attention formulas in the reference backend, bit-identical. Sensitivity: no embedding scale 0.80, no q/k norm 0.81, no RoPE factor 0.16, the two thetas swapped 0.72 |
+| greedy, caches, batching | 12 greedy tokens == HF; cached == uncached 2.9e-6; paged == contiguous exactly; packed and batched == alone 1.9e-6; forks exact; bf16 weights streamed (6.3e-8, the head widened 100 rows at a time) |
+| bf16 KV, embedding scale | bf16 KV: same argmax as HF at 23/23 positions, KL 1.3e-5; the bf16 scale (11.3125 at the tiny model's hidden 128) == transformers' with bf16 weights, 1.6e-4 from the fp32 scale's logits |
+| the checkpoint's layout | text under `language_model.model.` with vision tensors beside it: logits bit for bit, 158 tensors read, none of the vision ones; a separate `lm_head` refused |
+| window 8 over 40 positions | stateless, 6 chunk schedules (contiguous, paged blocks of 4 and 3), greedy 20 tokens, batched paged decode, packed past the window, forks: == HF within 3.6e-6; the ring with every slot reused and NaN-poisoned 3.1e-6; the cap atomic for fresh, continuing, packed and batched sequences |
+| Metal on the tiny model | bf16 / INT8 / INT4: prefill, batched paged decode and single-row decode to position 40 == the fp32 CPU model on the same rounded weights, worst 3.2e-6 / 3.7e-6 / 4.7e-6 |
+| suites | `test_gemma3` 40/40, `test_gemma3_tokenizer` 18/18; full suite 34/34 in 2,207 s |
+
+## Porting Sarvam-Translate, M3: the real model, fp32, in 8 GB (2026-10-24, commit `a9cbe98`)
+
+HF needs 15.5 GB for the text model in fp32. Both sides run one layer at a time.
+
+| step | result |
+|---|---|
+| answer key (`scripts/golden_gemma3.py` on `scripts/streamed_hf.py`, shared with `golden_aya.py`) | transformers' own `Gemma3DecoderLayer`s one at a time, a rotary table and mask per layer type, the tied head in slices; on tiny models bit-identical to `Gemma3ForCausalLM` and to a checkpoint-shaped `Gemma3ForConditionalGeneration` in 21 bf16 shards. Real model: 10 prompts (376 tokens), 841 s, peak RSS 2.79 GiB, 783 MB; each prompt saved as it finishes, a rerun skips them (~5 s without the model). `golden_aya.py` on the shared code: both Tiny Aya keys bit-identical (304 + 6 tensors) |
+| engine, `Gemma3Model(stream=True)` (`test_gemma3_model`, 10/10, 844 s) | ids == the key on all 10 prompts; embedding bit-identical; 36 captured tensors within 1.1e-5 (worst token 1.8e-5, both the final norm); logits of all 376 positions 1.3e-5 (token 1.9e-5); greedy identical on 10/10 (285 tokens), 275 decode steps 5.8e-6. The tiny model's decode-step gap (to 3.9e-7) is only the head in 100-row slices (64-row slices are exact) |
+| embedding scale, bf16 50.5 vs fp32 50.596 (651 positions) | KL mean 1.39e-5, median 3.74e-7, max 1.10e-3; same top token at 651/651; greedy identical on every prompt |
+| long key past the 1024 window (`golden_gemma3.py --long`, `test_gemma3_long` 7/7, 389 s) | 1,416 tokens, 42 rows, 16 greedy tokens; 313 s, peak RSS 2.22 GiB. Engine in 600-token chunks (one crosses 1024): final norm of every position 4.0e-5 before 1024, 1.8e-5 from it (median 1.9e-6); 34 layers at 42 rows 2.7e-5; logits 2.0e-5; 15 decode steps 4.8e-6; greedy 16/16. Window off from 600: positions 600-1023 unchanged, from 1024 on worst 6.7 (median 0.67) |
+| what Sarvam says | Hindi -> English: "As the first rain of the monsoon filled every leaf with fresh, green life, people came out to celebrate."; Manipuri in Meitei Mayek and Santali in Ol Chiki, neither stopping within 40 tokens; every stop `<eos>` (1) |
+
+## Porting Sarvam-Translate, M4: INT8 / INT4 on Metal (2026-10-24, commit `a9cbe98`)
+
+| step | result |
+|---|---|
+| calibration text | FLORES+ was still closed to this account (403, "not in the authorized list", 2026-10-24), so 44 Wikipedia pages at pinned revisions with SHA-256 pins (22 languages + English, both directions; Bodo and Dogri from the Wikimedia Incubator), split calib / held-out; IN22-Gen never used |
+| files | INT8 4.12 GB in 39.2 s (max RSS 2.52 GB); flat INT4 2.72 GB in 51.8 s (embedding INT8); policy INT4 2.99 GB in 25.6 s (106 INT8 tensors: embedding + 48 groups) |
+| calibration (`calibrate_quant.py --baseline int8`, a rows reference per prompt) | fp32 reference 88 prompts, 6,293 rows, 215 s. A resident INT8 model swapped (5.4-5.7 GB footprint, 290 s per tensor), so each tensor's layer is read from the INT8 and flat INT4 files and the measurement starts there (same KL as from layer 0): 136 tensors in 2,995 s at 2.4 GB. Calib KL: INT8 0.00031, flat INT4 0.04875; kept INT8 by damage per byte, +71 MB 0.03782, +154 MB 0.03385, +271 MB 0.02806, +1,046 MB 0.00698. Rule: keep while a step buys back at least the all-INT8 average KL per byte (3.45e-5 per MB): 48 tensors (+271 MB: 27 qkv, 14 o_proj, 4 down, 3 gate_up). Worst held-out languages flat -> policy: kas 0.0993 -> 0.0375, mni 0.0836 -> 0.0297, snd 0.0747 -> 0.0353 |
+| quality vs the M3 key (`test_gemma3_quant` 16/16; 651 positions) | INT8 KL 0.0005 (bf16 KV 0.0006), 0/483 flips, greedy 263 / 238 of 285 (leaving the key only at near-ties, gaps 0.02 and 0.00); flat INT4 0.0509, 19 flips, 184/285; policy INT4 0.0407 (bf16 KV 0.0413), 4 flips, 223/285. Long key: INT8 0.0016, flat 0.0727, policy 0.0522; greedy 16 / 14 / 14 of 16. bf16 vs fp32 embedding scale +0.0003. GPU peak INT8 4.58 GiB, flat 4.10, policy 4.07 (gate 5.07); 0 Metal aborts |
+| kernels | `test_kernels` 83/83, 15 new at Gemma's shapes (quantized matvec to 262208 x 2560 within 5e-6 relative, rms_norm with 1 + w, window-1024 decode attention contiguous and paged with poisoned blocks) |
+| decode profile (policy INT4, batch 1) | 41.5 ms per step (24.1 tok/s) in a fresh process; 691 GPU work items (20.3 per layer); matvecs 65%, head 19%, norms 3.6%, attention 2.5%. Batch 8: 137.9 ms (58 tok/s), the batched quantized matvecs 107 ms of it (~21 GB/s). A fused norm + add kernel, bit-identical, gained +0.4% at batch 1 (noise): not kept |
+| serving memory (first budgets) | 8K INT4 generation 4.40 GiB (0.83x); INT8 at 8K reached 0.95x, so INT8 capped at 4,096 tokens with 241 blocks (0.90x); server pool 320 blocks (680 MiB, two 8K sequences); 8K prefill 38.5 s on INT4 (212 tok/s). Revised after review (below) |
+
+## Porting Sarvam-Translate, M5: the window with rings, and 34 KV groups (2026-10-24/26)
+
+| step | result |
+|---|---|
+| long text on Metal (`test_gemma3_long_quant` 9/9, 107 s) | the 1,416-token key in 300-token chunks, a minimal paged pool with poisoned blocks (84-block rings wrap, 6 slots per sliding layer reused), decoded batched with a short second sequence. INT8 KL 0.0011 before 1024, 0.0029 from it, decode 0.0004; 0/34 flips; greedy 16/16, free run 16/16. Policy INT4 0.0636 / 0.0601 / 0.0225, 1/34 flips, 14/16, free run 4 tokens (then a near-tie, gap 0.01). Prefill hidden states bit-identical to a contiguous cache; paged batched vs contiguous decode KL 2-3e-7; GPU 4.49 / 4.06 GiB; 0 aborts |
+| cost of 34 one-layer groups (gcd(5, 29) = 1) | batch 8, bf16 KV, policy INT4: `batch_layout` 1.18 ms of a 221.3 ms step at 2K (0.53%), 1.65 of 277.2 at 8K (0.59%; on battery); against M4's fresh 138 ms step it would be 1.2%. Below the 3% threshold: unequal groups not built (with 2 groups at most ~1.2 ms saved) |
+
+## Sarvam-Translate: review of M3-M5 and the fixes (2026-10-26)
+
+| finding (all 9 confirmed) | fix and result |
+|---|---|
+| serving budgets came from single cold runs, but the allocator's peak grows on repeated runs | `bench.py --serve-mix`: every server workload in one long-running process, each twice, decide interleaved with a generation's prefill as `Scheduler._loop` runs them. Old registry: INT8 1.039x, INT4 0.977x (over 0.95x), from `/v1/decide`'s 2 forks. Now `fork_budget=0` (options scored on the context's own state, rewound), INT8 decide cap 2048 -> 1024, INT4 6144 -> 4096: worst INT8 0.935x, INT4 0.901x, 0 aborts. `tests/test_gemma3_serve_memory.py` (6/6, 839 s) gates the registry's budgets |
+| the answer-key resume ignored provenance | each record stores the generator version, transformers and torch versions and a hash of config, index and safetensors headers; a mismatch or `--force` regenerates. Both Gemma keys regenerated: bit-identical (main 400 tensors, long 41) |
+| the held-out calibration split came from the same text as calib | held-out from each article's middle on (43 of 44 prompts changed): flat INT4 0.0607, policy 0.0394. The rule picks 48 on calib and 32 on held-out; a 2,000-resample bootstrap on calib picks 48 in 55%, 16 in 21%, 64 in 17%: written into the policy file as "not resolved by this data". `model.int4.qt` unchanged |
+| KL gates 100x the measured values | margins over the measured values; the policy must stay under 0.9x flat INT4's KL (measured 0.81x, long key 0.70x) |
+| duplicated helpers, serial decode in the quant test, duplicated long-key code, a dead variable | helpers in `tests/serving_targets.py`; one prefill per prompt and teacher-forced + free sequences in one `decode_batch` (556 s, same numbers); `streamed_hf.long_rows` / `long_key` shared (Tiny Aya's long key bit-identical) |
+
+## Sarvam-Translate: the 22-language study (2026-10-24/25; `docs/bench/sarvam-translate.md`)
+
+| step | result |
+|---|---|
+| harness (`scripts/eval_translate.py`, `eval_translate_report.py`; `test_eval_translate` 51/51 on tiny models) | IN22-Gen, 50 sentences x 44 directions; chrF++ on IN22's own protocol (IndicNLP normalize + trivial_tokenize), paired bootstrap CIs resampled jointly over a macro row's languages, bits per character of the references, per-segment code versions. The review (8 findings, all confirmed and fixed): chrF++ of canonically equal text (NFC vs not) was 48.5, and macro CIs from independent languages 3.7x too narrow |
+| chrF++ (INT4 everywhere) | English -> X macro: Sarvam 50.4, Tiny Aya 26.7, Qwen3.5-2B 15.4 (Tiny Aya's 9: 53.3 / 44.4 / 24.3). X -> English: 52.2 / 40.5 / 33.8 (Tiny Aya's 9: 54.9 / 56.7 / 45.4). Tiny Aya ahead into English in Hindi +3.1 [+0.4, +6.1], Marathi +4.7 [+1.3, +8.5], Urdu +3.9 [+0.0, +7.6]. Into Manipuri, Santali, Bodo, Dogri the general models score 0.4-8.3 vs 39.7-59.5, almost none in the target's script |
+| bits per character | Sarvam INT8 vs INT4: -0.004 [-0.005, -0.004] into Indic, -0.003 [-0.009, +0.003] into English. Into English Tiny Aya's reference cost is lower than Sarvam's in all 9 of its languages (0.379 vs 0.515), most where Sarvam's own output departs from the reference (excess 0.236 vs 0.043 bits per character, worst vs best third); the end-token tables score `<end_of_turn>` for Sarvam, which stops with `<eos>` (median 27 nats) |
+| tokens per character | Sarvam: Hindi 0.281, Manipuri 1.830 (68.4% byte tokens), Santali 1.016 |
+| speed (partial) | Sarvam INT4 21.0 tok/s at batch 8 over 2,136 of 2,200 requests; Tiny Aya's and Qwen3.5's rows cover only their last, X -> English, segments |
+
 ## Review workflows run
 
 | week | agents | findings → confirmed | notable |
@@ -343,3 +419,5 @@ Plan: three independent plans and a judge (workflow wf_9e11ff20-55a), one step p
 | Tiny Aya M1 | 8 | 30 → 25 confirmed: 4 deferred to M2 / M4 / M6, 2 documented as rare known differences, the rest fixed | `\b` vs Oniguruma; template errors were 500; `enable_thinking` on Tiny Aya gave an empty reply; the legacy rope key was accepted |
 | Tiny Aya M2 | 6 | 11 → 8 confirmed (7 distinct), all fixed; 3 refuted, 2 of them added anyway as cheap checks | no model bug; untied heads accepted; the INT4 policy missed the fused qkv; the length cap only in create_app; test gaps found by 63 planted bugs |
 | Tiny Aya M4 | 7 | 9 → 8 confirmed (6 distinct), all fixed; 1 refuted, its wording adopted | the new int8 calibration mode broke the bf16 one (no test runs the script); an interrupted quantize destroyed the earlier .qt; the served-KL mask left out BOS and the reply's first prediction |
+| Sarvam-Translate comparison harness | — | 8 → 8 confirmed, all fixed | chrF++ without IN22's normalization (48.5 on canonically equal text); macro CIs from independent languages 3.7x too narrow; run identity per segment |
+| Sarvam-Translate M3-M5 | — | 9 confirmed, all fixed | serving budgets from cold single runs (INT8 1.039x in a long-running mix, from decide's forks); key resume without provenance; held-out calibration from the same text; KL gates 100x the measured values |

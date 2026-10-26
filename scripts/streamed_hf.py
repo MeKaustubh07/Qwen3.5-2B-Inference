@@ -1,13 +1,33 @@
+import hashlib
 import json
 from pathlib import Path
 
 import torch
+import transformers
 from safetensors import safe_open
 from transformers import AutoConfig
 from transformers.cache_utils import DynamicCache
 from transformers.masking_utils import create_causal_mask, create_sliding_window_causal_mask
 
 MASKS = {"full_attention": create_causal_mask, "sliding_attention": create_sliding_window_causal_mask}
+GENERATOR = 1                             # bump when a change here or in a family's forward changes the keys it writes
+HEAD_ROWS = 32768                         # rows of the tied head widened to fp32 at a time (~320 MB at hidden 2560)
+
+
+def provenance(model_dir: str) -> dict:
+    """What an answer key depends on besides its prompt: this generator, transformers and torch (their forward and
+    fp32 rounding), and the checkpoint (its config and its tensors' names, dtypes, shapes and offsets)."""
+    d, h = Path(model_dir), hashlib.sha256()
+    h.update((d / "config.json").read_bytes())
+    index, files = d / "model.safetensors.index.json", ["model.safetensors"]
+    if index.exists():
+        h.update(index.read_bytes())
+        files = sorted(set(json.load(open(index))["weight_map"].values()))
+    for f in files:
+        with open(d / f, "rb") as fh:                          # a safetensors header: 8-byte length, then its JSON
+            h.update(fh.read(int.from_bytes(fh.read(8), "little")))
+    return {"generator": GENERATOR, "transformers": str(transformers.__version__), "torch": str(torch.__version__),
+            "checkpoint": h.hexdigest()}
 
 
 def fp32(t: torch.Tensor) -> torch.Tensor:
@@ -20,9 +40,11 @@ class StreamedDecoder:
     layer_class: type                     # the family's decoder layer, built as layer_class(config, i)
     layer_kwargs: dict = {}               # what the family's HF model passes each layer besides the tensors
 
-    def __init__(self, model_dir: str, prefixes: tuple[str, ...] = ("model.",)):
-        """prefixes: where the text model's tensors may sit in the checkpoint, in order of preference."""
+    def __init__(self, model_dir: str, prefixes: tuple[str, ...] = ("model.",), head_rows: int = HEAD_ROWS):
+        """prefixes: where the text model's tensors may sit in the checkpoint, in order of preference. head_rows: rows
+        of the tied head widened to fp32 at a time."""
         d = Path(model_dir)
+        self.head_rows = head_rows
         self.config = AutoConfig.from_pretrained(d).get_text_config()
         self.config._attn_implementation = "eager"
         index = d / "model.safetensors.index.json"
@@ -64,9 +86,9 @@ class StreamedDecoder:
         table = self._slice("embed_tokens.weight")
         return torch.stack([table[i:i + 1][0] for i in ids]).float()
 
-    def tied_head(self, h: torch.Tensor, rows: int) -> torch.Tensor:
-        """[N, hidden] -> [N, vocab] through the embedding table, widened `rows` rows at a time."""
-        V = self.config.vocab_size
+    def tied_head(self, h: torch.Tensor) -> torch.Tensor:
+        """[N, hidden] -> [N, vocab] through the embedding table, widened head_rows rows at a time."""
+        V, rows = self.config.vocab_size, self.head_rows
         table = self._slice("embed_tokens.weight")
         return torch.cat([h @ fp32(table[r:min(r + rows, V)]).T for r in range(0, V, rows)], dim=-1)
 
@@ -150,3 +172,35 @@ class StreamedDecoder:
         """One prompt: (logits of every position, n argmax tokens)."""
         logits, out, _ = self.greedy_all([ids], n, [capture])
         return logits[0], out[0]
+
+
+def long_rows(n: int, window: int, after: int = 6) -> list[int]:
+    """The rows a long key keeps: every 64th, the window's edge (window - 6 .. window + after), the last 8."""
+    return sorted(set(range(0, n, 64)) | set(range(window - 6, min(window + after + 1, n))) | set(range(max(0, n - 8), n)))
+
+
+def long_key(ref: StreamedDecoder, ids: list[int], n_new: int, rows: list[int], chunk: int | None = None,
+             layers: bool = False, stop=(), log=None) -> dict:
+    """One long prompt prefilled over one cache (in chunk-token passes, or one), then greedy until a stop id or n_new
+    tokens -> its record: the final norm of every position, the logits (and with layers, every layer's output) at
+    rows, the greedy tokens and the logits of their decode steps."""
+    cache, hs, caps = DynamicCache(config=ref.config), [], []
+    step = chunk or len(ids)
+    for i in range(0, len(ids), step):
+        caps.append({} if layers else None)
+        hs.append(ref.run_all([ids[i:i + step]], [cache], [caps[-1]])[0])
+        if log:
+            log(f"prefill {min(i + step, len(ids))}/{len(ids)}")
+    h, at = torch.cat(hs), torch.tensor(rows)
+    logits = ref.head(h[at])
+    greedy, steps = [int(logits[-1].argmax())], []
+    while len(greedy) < n_new and greedy[-1] not in stop:
+        lg = ref.head(ref.run_all([[greedy[-1]]], [cache])[0][-1:])[0]
+        greedy.append(int(lg.argmax())); steps.append(lg)
+        if log:
+            log(f"token {len(greedy)}/{n_new}")
+    rec = {"ids": torch.tensor(ids), "final_norm": h, "rows": at, "logits": logits, "greedy": torch.tensor(greedy),
+           "step_logits": torch.stack(steps) if steps else torch.empty(0)}
+    if layers:
+        rec["layers"] = {k: torch.cat([c[k] for c in caps])[at] for k in caps[0] if k != "final_norm"}
+    return rec

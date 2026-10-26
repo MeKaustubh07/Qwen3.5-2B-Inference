@@ -213,10 +213,9 @@ with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as shar
     hf16.to(torch.bfloat16).save_pretrained(shards, max_shard_size="300KB")      # in 100-row slices, prompts crossing
     hf = Cohere2ForCausalLM.from_pretrained(shards, dtype=torch.float32, attn_implementation="eager").eval()  # the window
     long, short = (torch.randint(3, 512, (n,), generator=torch.Generator().manual_seed(n)).tolist() for n in (30, 7))
-    rows, golden_aya.HEAD_ROWS = golden_aya.HEAD_ROWS, 100
     caps = [{}, {}]
-    k_logits, k_greedy, _ = golden_aya.StreamedCohere2(shards).greedy_all([long, short], 6, caps, keep_from=[20, 0])
-    golden_aya.HEAD_ROWS = rows
+    k_logits, k_greedy, _ = golden_aya.StreamedCohere2(shards, head_rows=100).greedy_all([long, short], 6, caps,
+                                                                                         keep_from=[20, 0])
     ok = os.path.exists(f"{shards}/model.safetensors.index.json")
     for p, lg, g, cap, k0 in zip((long, short), k_logits, k_greedy, caps, (20, 0)):
         h_logits, h_cap = hf_run(hf, torch.tensor(p))

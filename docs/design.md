@@ -44,13 +44,16 @@ against Hugging Face `transformers`.
 | component | file | responsibility |
 |---|---|---|
 | loader | `src/weight_loader.py` | parse the safetensors header, mmap the file, hand out zero-copy bf16 tensor views; a sharded checkpoint through its `model.safetensors.index.json` |
-| config | `src/config.py` | `Qwen35Config`, `Cohere2Config` (refuses settings the engine does not implement) |
-| tokenizer | `src/tokenizer.py` | byte-level BPE from `tokenizer.json` (GPT-2 byte alphabet, merge ranks, special tokens first, NFC if the file asks, every regex Split, BOS from the post-processor); merges as HF tokenizers does them, a heap of pairs by rank and position, n log n per word |
-| chat template | `src/chat.py` | Qwen3.5 ChatML incl. thinking-mode rules; or the model's own Jinja template, rendered as transformers renders it (Tiny Aya) |
+| config | `src/config.py` | `Qwen35Config`, `Cohere2Config`, `Gemma3Config` (from a checkpoint's `text_config` or a text model's own; refuses settings the engine does not implement) |
+| tokenizer | `src/tokenizer.py` | byte-level BPE from `tokenizer.json` (GPT-2 byte alphabet, merge ranks, special tokens first, NFC if the file asks, every regex Split, BOS from the post-processor); or SentencePiece-style BPE (Gemma 3): a Replace normalizer, merges from characters, byte fallback for characters with no token, added tokens split by a trie; both merge as HF tokenizers does, a heap of pairs by rank and position, n log n per word (a SentencePiece text is one word) |
+| chat template | `src/chat.py` | Qwen3.5 ChatML incl. thinking-mode rules; or the model's own Jinja template, rendered as transformers renders it (Tiny Aya, Sarvam-Translate) |
 | model | `src/models/qwen3_5.py` | hybrid layers, fused projections, partial RoPE, output gate, DeltaNet prefill and decode |
+| model | `src/models/decoder.py` | `AttentionDecoder`, the base of the all-attention models: fused qkv / gate-up, per-layer windows, prefill, packed and batched decode over contiguous, paged or grouped KV, streamed fp32 weights for the answer-key tests |
 | model | `src/models/cohere2.py` | Tiny Aya: all-attention layers, LayerNorm feeding attention and MLP in parallel, interleaved RoPE (by reordering q/k rows at load) on sliding layers only, a 4096-token sliding window on 27 of 36 layers (they read only their window's suffix of the KV cache), logit scale, bf16 KV |
-| state | `src/state.py` | contiguous and paged KV caches, block allocator (refuses double frees), `HybridState`; `GroupedKVPool` for Tiny Aya: layer groups as pool units, a per-sequence ring of blocks for the sliding layers (an 8K sequence holds 388 MiB of bf16 KV instead of 576) |
-| kernels | `src/kernels/*.metal` | matvec (bf16, INT8, INT4, batched), RMSNorm, LayerNorm (Tiny Aya), RoPE, decode attention, DeltaNet step, SwiGLU |
+| model | `src/models/gemma3.py` | Sarvam-Translate (Gemma 3 text model): sandwich norms (RMSNorm with 1 + w before and after attention and MLP), q/k norm, GeGLU, the embedding scaled by sqrt(hidden) in the weights' dtype, two RoPE tables (local theta 10,000; global 1,000,000 with linear factor 8), a 1024-token window on 29 of 34 layers; reads the text tower under `language_model.model.` and never the vision tensors |
+| state | `src/state.py` | contiguous and paged KV caches, block allocator (refuses double frees), `HybridState`; `GroupedKVPool` for Tiny Aya: layer groups as pool units, a per-sequence ring of blocks for the sliding layers (an 8K sequence holds 388 MiB of bf16 KV instead of 576); Sarvam-Translate's gcd(5, 29) = 1 gives 34 one-layer groups (their layout costs 0.5-0.6% of a batch-8 step) |
+| backend protocol | `src/backend/base.py` | the ops a model may call; v2 added Qwen3.5's DeltaNet ops, v3 `layer_norm` (Tiny Aya), v4 `gelu_tanh_mul`, fused `geglu` and a linear-scaling `factor` on `rope` (Gemma 3); the torch reference and Metal implement each |
+| kernels | `src/kernels/*.metal` | matvec (bf16, INT8, INT4, batched), RMSNorm, LayerNorm (Tiny Aya), RoPE, decode attention, DeltaNet step, SwiGLU, GeGLU (Gemma 3) |
 | quantization | `src/quant.py` | block-32 INT8 / asymmetric INT4, calibrated mixed-precision policy, `.qt` format |
 | scheduler | `src/server/scheduler.py` | continuous batching, admission control, preemption, cancellation, drain |
 | API | `src/server/app.py` | `/v1/completions`, `/v1/chat/completions` (SSE), `/health`, `/ready`, `/metrics` |
@@ -89,7 +92,11 @@ against Hugging Face `transformers`.
    the M2, `torch.topk` over the 248k vocabulary is 4× faster on the CPU than on MPS, so the GPU was the wrong
    place for it.) A request that cannot be sampled fails alone.
 7. **Stream.** Tokens are decoded incrementally. Text ending in an incomplete UTF-8 character (U+FFFD) is held
-   back until the next token completes it. Each piece goes to the handler's asyncio queue and out as an SSE chunk.
+   back until the next token completes it. A SentencePiece tokenizer with byte fallback (Gemma 3) needs more: HF
+   decodes a run of byte tokens all or nothing, so a character already decoded turns into U+FFFD if the run goes on
+   with bytes that make it invalid; there text is held back while the last token is a byte token
+   (`Tokenizer.is_final`; Meitei Mayek is about two thirds byte tokens). Each piece goes to the handler's asyncio
+   queue and out as an SSE chunk.
 8. **Finish** on EOS, `max_tokens`, cancellation (client disconnect), or error. KV blocks go back to the pool
    immediately, so a waiting request can take the slot on the next step.
 
@@ -139,7 +146,11 @@ and a 4k-token context 384 MiB **per sequence**. With 18 of 24 layers as DeltaNe
 MiB of fixed state. Qwen3.5's KV cache is kept in fp32 to match the reference exactly. Tiny Aya's (36 attention
 layers, 144 KiB per token in fp32) is stored in bf16 (`kv_dtype` in the registry): the decode-attention kernels read
 bf16 or fp32 K/V and widen each element as they read it, and the cost is measured as a KL change (none measurable
-at the answer key's positions; tests/test_aya_quant.py).
+at the answer key's positions; tests/test_aya_quant.py). Sarvam-Translate's (34 attention layers x 4 KV heads x 256,
+136 KiB per token in bf16) would be 1,088 MiB for an 8K sequence in one table; its 29 sliding layers hold rings of
+at most 97 blocks, so two 8K sequences take 317 of its server pool's 320 blocks (680 MiB).
+Its `/v1/decide` never forks (`fork_budget=0`): a fork copies all 34 layers at the context's full length, and two
+forks beside a generation's prefill took INT8 to 1.04x of Metal's recommended working set.
 
 ## 5. Performance model
 

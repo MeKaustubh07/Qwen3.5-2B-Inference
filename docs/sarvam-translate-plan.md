@@ -108,14 +108,14 @@ HF needs 15.5 GB for the text model in fp32 and 7.8 GB in bf16, so neither fits.
 
 | # | milestone | exit test | size |
 |---|---|---|---|
-| M0 | this plan; download the pinned revision; licence reading; access to IN22-Gen and FLORES+ (both gated with automatic approval: accept the terms yourself) | SHA-256 of both shards == their HF LFS hashes; IN22-Gen's Manipuri script known (Meitei or Bengali: UNVERIFIED); prior-work check on the ~25 public conversions (does any report per-language quality?) | S |
-| M1 | tokenizer SentencePiece mode, `Gemma3Config`, loader prefix, chat, registry entry | tokenizer == HF on the existing answer key (Qwen and Tiny Aya unchanged) plus a new 22-script key (byte fallback, whitespace runs, tabs, newlines, emoji, special tokens); chat == `apply_chat_template`; `tests/test_gemma3.py` | M |
-| M2 | `Gemma3Model` (fp32, CPU) on tiny-full and tiny-window; ops `geglu` and per-type RoPE | every layer and the logits within ~1e-6 of HF; greedy identical; cached == uncached; paged == contiguous; batched and packed == alone; forks; past the window on every path | M |
-| M3 | real-model layer-streamed fp32 key + `Gemma3Model(stream=True)` | every layer, logits and greedy tokens against the key, both directions, 8+ languages | M |
-| M4 | Metal: GeGLU kernels, INT8 / INT4 `.qt`, a calibrated INT4 policy | KL / flips / greedy vs the M3 key; peak GPU memory <= 0.95x recommended; no Metal aborts in macOS's log; tok/s | M |
-| M5 | the 1024 window with rings on the real model; the cost of 34 KV groups | long-text key past the window; decode step time with 34 vs (if built) 2 groups | S-M |
-| M6 | serving: registry defaults, server suites on the new target, optional `/v1/translate` (chunking, pivot, cached instruction) | the server, prefill and decision suites pass on `--target sarvam-translate-int4/int8` | M |
-| M7 | the study and write-up (section 7) | `docs/bench/sarvam-translate.md` with every number reproducible from one command per table | M |
+| M0 | this plan; download the pinned revision; licence reading; access to IN22-Gen and FLORES+ (both gated with automatic approval: accept the terms yourself) | DONE 2026-10-23/24: SHA-256 of both shards == their HF LFS hashes (`24686ad5…`, `3cf079c7…`); IN22-Gen's Manipuri is Meitei Mayek (`mni_Mtei`); IN22-Gen accessible (revision `e042ab3d`), FLORES+ still refused for this account (403, 2026-10-24), so calibration used pinned Wikipedia text. Open: the licence question (section 9) and the prior-work check on the public conversions | S |
+| M1 | tokenizer SentencePiece mode, `Gemma3Config`, loader prefix, chat, registry entry | DONE (`6f1a79b`): tokenizer == HF on 413/413 answer-key cases in 22 scripts (130 with byte fallback), 3,000 random texts and id lists, and 6 synthetic configurations x 19,607 strings, 0 differ; Qwen and Tiny Aya ids byte-identical; config == transformers on 12 fields and both RoPE tables (5 configurations, 16 settings refused); chat == `apply_chat_template` incl. the card's system prompt and the role-alternation error; byte-fallback-safe streaming; `tests/test_gemma3_tokenizer.py` 18/18 | M |
+| M2 | `Gemma3Model` (fp32, CPU) on tiny-full and tiny-window; ops `geglu` and per-type RoPE | DONE (`6f1a79b`): `tests/test_gemma3.py` 40/40: every layer within 2.6e-6 and logits 1.9e-6 of HF (bit-identical with HF's formulas), greedy 12/12, cached == uncached, paged == contiguous exactly, batched and packed == alone, forks, window 8 past 40 positions on every path (3.6e-6) incl. poisoned rings; `AttentionDecoder` extracted from Cohere2 (133 tensors bit-identical); full suite 34/34 in 2,207 s | M |
+| M3 | real-model layer-streamed fp32 key + `Gemma3Model(stream=True)` | DONE (`a9cbe98`): key of 10 prompts (English into Hindi, Marathi, Tamil, Bengali, Urdu, Manipuri in Meitei Mayek and Santali in Ol Chiki; Hindi and Marathi into English; one raw prompt; 841 s, 2.79 GiB); every layer within 1.1e-5, logits 1.3e-5, greedy identical on 10/10 (285 tokens), 275 decode steps 5.8e-6; long key of 1,416 tokens past the window: every position within 4.0e-5, greedy 16/16, window off 6.7; bf16 vs fp32 embedding scale KL 1.39e-5, greedy identical | M |
+| M4 | Metal: GeGLU kernels, INT8 / INT4 `.qt`, a calibrated INT4 policy | DONE (`a9cbe98`): INT8 4.12 GB KL 0.0005, 0/483 flips; flat INT4 2.72 GB KL 0.0509, 19 flips; policy INT4 (48 tensor groups INT8, +271 MB) 2.99 GB KL 0.0407, 4 flips, greedy 223/285; GPU peak 4.58 GiB at most, 0 Metal aborts; 24.1 tok/s single stream (fresh process), 58 tok/s at batch 8; serving budgets measured in one long-running process (`test_gemma3_serve_memory`, worst 0.935x) | M |
+| M5 | the 1024 window with rings on the real model; the cost of 34 KV groups | DONE: `test_gemma3_long_quant` 9/9: rings wrapped and poisoned, prefill bit-identical to a contiguous cache, INT8 KL 0.0016 greedy 16/16, policy INT4 0.0516 14/16; 34 groups cost 0.53% (2K) / 0.59% (8K) of a batch-8 step, under the 3% threshold, so 2 groups were not built | S-M |
+| M6 | serving: registry defaults, server suites on the new target, optional `/v1/translate` (chunking, pivot, cached instruction) | TBD (not started): the server, prefill and decision suites pass on `--target sarvam-translate-int4/int8`. Done ahead of it: registry defaults (card sampling, caps INT4 8192 / INT8 4096, decide 4096 / 1024, `fork_budget=0`) measured by `bench.py --serve-mix` | M |
+| M7 | the study and write-up (section 7) | PARTLY DONE: `docs/bench/sarvam-translate.md`: chrF++ in 22 languages both directions for Sarvam INT4, Tiny Aya INT4 and Qwen3.5-2B INT4 with joint paired bootstrap CIs (English -> X macro 50.4 / 26.7 / 15.4; X -> English 52.2 / 40.5 / 33.8), bits per character incl. Sarvam INT8 vs INT4 (-0.004), tokens per character (Manipuri 1.830, 68% byte tokens). TBD: Sarvam INT8 and flat INT4 translations, llama.cpp Q4_K_M and MLX 4-bit, the prompt control, KL per language on IN22, speed with the Tiny Aya M7 protocol | M |
 
 Time in weeks comes after M1-M2, once the pace on this model is known.
 
@@ -137,16 +137,24 @@ Time in weeks comes after M1-M2, once the pace on this model is known.
 5. **Speed on the same M2:** single stream, batch 8, prefill and TTFT against llama.cpp and MLX, with the same interleaved protocol as Tiny Aya M7.
 6. **Memory:** concurrent 8K sequences in a fixed budget, with rings vs one flat table.
 
-## 8. Decisions (to take before M1)
+## 8. Decisions (proposed before M1; what was taken, 2026-10-26)
 
 1. **Embedding scale.**
    - HF multiplies by sqrt(2560) cast to the weight dtype: 50.5 with bf16 weights (how the card's bf16 vLLM serving runs, UNVERIFIED for vLLM's code), 50.596 in fp32.
    - Proposal: the fp32 reference mode uses 50.596 (to match the fp32 key exactly); the quantized Metal path uses 50.5, the value the model was served and probably fine-tuned with; report the KL between the two settings.
+   - **Taken.** `embed_scale_dtype` on the model: fp32 against the fp32 key, bf16 (50.5) in the registry. Measured: against the fp32 model KL mean 1.39e-5, top token the same at 651/651 positions, greedy identical; on the policy INT4, 0.0413 vs 0.0409 (+0.0003).
 2. **Data.** IN22-Gen (CC-BY-4.0) for evaluation; FLORES+ dev (CC-BY-SA-4.0) for calibration only. Publish scores and IDs, never the text.
+   - **Taken in part.** IN22-Gen for evaluation only (50 sentences per direction; scores and ids in `docs/bench/raw/sarvam_translate/`). FLORES+ stayed closed to this account (403, 2026-10-24), so calibration used 44 Wikipedia pages at pinned revisions (CC BY-SA, kept out of the repository), with the held-out split from each article's middle on.
 3. **Direction order.** English -> X first (generating Indic text is where 4-bit should hurt most), then X -> English.
+   - **Taken.** The harness generates every English -> X direction, then X -> English.
 4. **Decoding for the study.** Greedy (the card's temperature 0.01 is effectively greedy, and greedy is reproducible).
+   - **Taken.** Greedy, batch 8; at most 32 + 4 x (source characters) new tokens.
 5. **Repository.** This repository, on the checked-out branch; same venv: transformers 5.16.1 has Gemma 3, and tokenizers 0.23.1 has byte-fallback BPE for the answer key.
+   - **Taken**, plus sacrebleu 2.6.0, pyarrow 26.0.0, indic-nlp-library 0.92 and urduhack 1.1.1 (`--no-deps`) for the study.
 6. **Context.** Cap 8192 (the card's).
+   - **Taken for INT4.** INT8 serves at most 4,096 tokens (241 blocks) to stay under 0.95x of the GPU memory Metal recommends; `/v1/decide` at most 4,096 (INT4) and 1,024 (INT8), options scored on the context's own state, never forked.
+7. **INT4 policy** (not planned). Keep 48 tensor groups INT8 (+271 MB, 2.99 GB): calib KL 0.0281 vs flat 0.0488. The selection rule picks 32 on the held-out split, and a bootstrap picks 48 in 55% of resamples: the file records the choice as not resolved by this data.
+8. **34 KV groups** (not planned). Kept: their layout is 0.5-0.6% of a batch-8 step, under the 3% threshold set for building unequal groups.
 
 ## 9. Licence and access (short)
 
