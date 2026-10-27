@@ -68,7 +68,7 @@ Size: S = under a day; M = a few days; L = a week or more.
 | registry | Qwen3.5, Tiny Aya | `sarvam-translate`: stops {1, 106}, cap 8192, Metal INT8 / INT4 only, bf16 KV, sampling from the card | S | low |
 | quantization | INT8 / INT4 + calibrated policy, incremental writer | reuse. Calibrate on FLORES+ dev text in the 22 languages, never on the eval set | M | med |
 | correctness key | `golden_aya.py` (layer-streamed fp32 HF key) | `golden_gemma3.py` with `Gemma3DecoderLayer`, a rotary table per layer type and a mask per layer type | M | med |
-| translation eval | none | `scripts/eval_translate.py`: chrF++ (sacrebleu, signature printed), paired bootstrap 95% CIs, per language and direction; `sacrebleu` pinned in requirements-dev | M | low |
+| translation eval | none | chrF++ (sacrebleu, signature printed), paired bootstrap 95% CIs, per language and direction: built here, then moved to the separate `indic-translation-bench` repository (2026-10-27) | M | low |
 | serving | chat + completions | optional `/v1/translate`: sentence chunking under a length budget, Indic <-> Indic pivot, the instruction prefix-cached | S-M | low |
 
 ## 4. Budgets
@@ -115,7 +115,7 @@ HF needs 15.5 GB for the text model in fp32 and 7.8 GB in bf16, so neither fits.
 | M4 | Metal: GeGLU kernels, INT8 / INT4 `.qt`, a calibrated INT4 policy | DONE (`a9cbe98`): INT8 4.12 GB KL 0.0005, 0/483 flips; flat INT4 2.72 GB KL 0.0509, 19 flips; policy INT4 (48 tensor groups INT8, +271 MB) 2.99 GB KL 0.0407, 4 flips, greedy 223/285; GPU peak 4.58 GiB at most, 0 Metal aborts; 24.1 tok/s single stream (fresh process), 58 tok/s at batch 8; serving budgets measured in one long-running process (`test_gemma3_serve_memory`, worst 0.935x) | M |
 | M5 | the 1024 window with rings on the real model; the cost of 34 KV groups | DONE: `test_gemma3_long_quant` 9/9: rings wrapped and poisoned, prefill bit-identical to a contiguous cache, INT8 KL 0.0016 greedy 16/16, policy INT4 0.0516 14/16; 34 groups cost 0.53% (2K) / 0.59% (8K) of a batch-8 step, under the 3% threshold, so 2 groups were not built | S-M |
 | M6 | serving: registry defaults, server suites on the new target, optional `/v1/translate` (chunking, pivot, cached instruction) | TBD (not started): the server, prefill and decision suites pass on `--target sarvam-translate-int4/int8`. Done ahead of it: registry defaults (card sampling, caps INT4 8192 / INT8 4096, decide 4096 / 1024, `fork_budget=0`) measured by `bench.py --serve-mix` | M |
-| M7 | the study and write-up (section 7) | PARTLY DONE: `docs/bench/sarvam-translate.md`: chrF++ in 22 languages both directions for Sarvam INT4, Tiny Aya INT4 and Qwen3.5-2B INT4 with joint paired bootstrap CIs (English -> X macro 50.4 / 26.7 / 15.4; X -> English 52.2 / 40.5 / 33.8), bits per character incl. Sarvam INT8 vs INT4 (-0.004), tokens per character (Manipuri 1.830, 68% byte tokens). TBD: Sarvam INT8 and flat INT4 translations, llama.cpp Q4_K_M and MLX 4-bit, the prompt control, KL per language on IN22, speed with the Tiny Aya M7 protocol | M |
+| M7 | the study and write-up (section 7) | MOVED (2026-10-27) to the separate `indic-translation-bench` repository, which drives this engine as a library: Sarvam-Translate (INT8 / INT4) vs Gemma 3 4B-it (the base of the fine-tune, same prompt, same quantization; registry `gemma-3-4b-it`) vs IndicTrans2 1B. A first study against Tiny Aya and Qwen3.5-2B is superseded (history: `9eaa6eb`); what it measured of the port: tokens per character (Manipuri 1.830, 68% byte tokens), bits per character INT8 vs INT4 (-0.004) | M |
 
 Time in weeks comes after M1-M2, once the pace on this model is known.
 
@@ -144,13 +144,13 @@ Time in weeks comes after M1-M2, once the pace on this model is known.
    - Proposal: the fp32 reference mode uses 50.596 (to match the fp32 key exactly); the quantized Metal path uses 50.5, the value the model was served and probably fine-tuned with; report the KL between the two settings.
    - **Taken.** `embed_scale_dtype` on the model: fp32 against the fp32 key, bf16 (50.5) in the registry. Measured: against the fp32 model KL mean 1.39e-5, top token the same at 651/651 positions, greedy identical; on the policy INT4, 0.0413 vs 0.0409 (+0.0003).
 2. **Data.** IN22-Gen (CC-BY-4.0) for evaluation; FLORES+ dev (CC-BY-SA-4.0) for calibration only. Publish scores and IDs, never the text.
-   - **Taken in part.** IN22-Gen for evaluation only (50 sentences per direction; scores and ids in `docs/bench/raw/sarvam_translate/`). FLORES+ stayed closed to this account (403, 2026-10-24), so calibration used 44 Wikipedia pages at pinned revisions (CC BY-SA, kept out of the repository), with the held-out split from each article's middle on.
+   - **Taken in part.** IN22-Gen for evaluation only (50 sentences per direction; scores and ids in the `indic-translation-bench` repository). FLORES+ stayed closed to this account (403, 2026-10-24), so calibration used 44 Wikipedia pages at pinned revisions (CC BY-SA, kept out of the repository), with the held-out split from each article's middle on.
 3. **Direction order.** English -> X first (generating Indic text is where 4-bit should hurt most), then X -> English.
    - **Taken.** The harness generates every English -> X direction, then X -> English.
 4. **Decoding for the study.** Greedy (the card's temperature 0.01 is effectively greedy, and greedy is reproducible).
    - **Taken.** Greedy, batch 8; at most 32 + 4 x (source characters) new tokens.
 5. **Repository.** This repository, on the checked-out branch; same venv: transformers 5.16.1 has Gemma 3, and tokenizers 0.23.1 has byte-fallback BPE for the answer key.
-   - **Taken**, plus sacrebleu 2.6.0, pyarrow 26.0.0, indic-nlp-library 0.92 and urduhack 1.1.1 (`--no-deps`) for the study.
+   - **Taken.** The study's own dependencies (sacrebleu, pyarrow, IndicNLP, urduhack) moved with it to `indic-translation-bench`.
 6. **Context.** Cap 8192 (the card's).
    - **Taken for INT4.** INT8 serves at most 4,096 tokens (241 blocks) to stay under 0.95x of the GPU memory Metal recommends; `/v1/decide` at most 4,096 (INT4) and 1,024 (INT8), options scored on the context's own state, never forked.
 7. **INT4 policy** (not planned). Keep 48 tensor groups INT8 (+271 MB, 2.99 GB): calib KL 0.0281 vs flat 0.0488. The selection rule picks 32 on the held-out split, and a bootstrap picks 48 in 55% of resamples: the file records the choice as not resolved by this data.

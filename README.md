@@ -35,7 +35,7 @@ load test). Details and methodology: [`docs/bench/compare.md`](docs/bench/compar
 
 | layer | highlights |
 |---|---|
-| models | Qwen3.5-2B (served, INT4) and Qwen3.5-0.8B (same-architecture fp32 reference), 18 Gated DeltaNet + 6 gated-attention layers; [Tiny Aya Global](#tiny-aya) (Cohere2, 3.35B); [Sarvam-Translate](#sarvam-translate) (Gemma 3 4B text model); Qwen2.5-0.5B was the bring-up model (removed 2026-09-30) |
+| models | Qwen3.5-2B (served, INT4) and Qwen3.5-0.8B (same-architecture fp32 reference), 18 Gated DeltaNet + 6 gated-attention layers; [Tiny Aya Global](#tiny-aya) (Cohere2, 3.35B); [Sarvam-Translate](#sarvam-translate) and Gemma 3 4B-it, its base (Gemma 3 4B text model); Qwen2.5-0.5B was the bring-up model (removed 2026-09-30) |
 | correctness | vs HF `transformers`: bring-up (Qwen2.5-0.5B, removed): layer-0 block ≤ 3.3e-5 and logits ≤ 3e-4 (fp32), greedy == HF on 5 prompts; Qwen3.5-0.8B every one of 24 layers ≤ 3.8e-6 relative (fp32), greedy identical on 7 prompts incl. Hindi; Qwen3.5-2B vs HF bf16 (fp32 does not fit in 8 GB): KL 0.0004 / 0.0007 / 0.045 for bf16 / INT8 / INT4, greedy 64 / 70 / 47 of 70 tokens, every divergence at a near-tie |
 | state | paged KV cache (block allocator, block tables) + fixed-size DeltaNet recurrent/conv state per sequence |
 | kernels (MSL) | bf16/INT8/INT4 matvec (+ batched), paged attention, batched DeltaNet step, RMSNorm, RoPE, fused SwiGLU, INT4/INT8 → fp32 expansion |
@@ -251,26 +251,18 @@ outputs quoted in `docs/` are model-generated.
 
 The engine also runs [Sarvam-Translate](https://huggingface.co/sarvamai/sarvam-translate) (Gemma 3 4B text model,
 fine-tuned for translation between English and the 22 scheduled Indian languages): plan in
-[`docs/sarvam-translate-plan.md`](docs/sarvam-translate-plan.md), results in [`docs/results-log.md`](docs/results-log.md),
-the 22-language study in [`docs/bench/sarvam-translate.md`](docs/bench/sarvam-translate.md). Its text model in fp32,
-streamed one layer at a time, matches transformers' own layers within 1.3e-5 on the logits, with greedy output
-identical on 10 of 10 prompts and past its 1024-token sliding window on a 1,416-token text. On an 8 GB Mac it serves up
-to 8,192 tokens in INT4 (4,096 for `/v1/decide`) and 4,096 in INT8 (1,024), budgets measured in one long-running
-process (`scripts/bench.py --serve-mix`).
+[`docs/sarvam-translate-plan.md`](docs/sarvam-translate-plan.md), results in [`docs/results-log.md`](docs/results-log.md).
+Its text model in fp32, streamed one layer at a time, matches transformers' own layers within 1.3e-5 on the logits,
+with greedy output identical on 10 of 10 prompts and past its 1024-token sliding window on a 1,416-token text. INT8
+costs KL 0.0005 from that fp32 key and the calibrated INT4 (2.99 GB) 0.041. On an 8 GB Mac it serves up to 8,192
+tokens in INT4 (4,096 for `/v1/decide`) and 4,096 in INT8 (1,024), budgets measured in one long-running process
+(`scripts/bench.py --serve-mix`). Its tokenizer spells Meitei Mayek mostly in bytes (1.83 tokens per character on
+IN22-Gen vs Hindi's 0.28), so a Manipuri translation takes ~6.5x the decode steps.
 
-| IN22-Gen, 50 sentences per direction, all INT4 | Sarvam-Translate (2.99 GB) | Tiny Aya Global (2.34 GB) | Qwen3.5-2B (1.41 GB) |
-|---|---:|---:|---:|
-| chrF++, English -> 22 languages (macro) | **50.4** | 26.7 | 15.4 |
-| chrF++, 22 languages -> English (macro) | **52.2** | 40.5 | 33.8 |
-| chrF++, Tiny Aya's 9 languages -> English | 54.9 | **56.7** | 45.4 |
-| KL from fp32 (the M3 answer key) | 0.041 (INT8: 0.0005) | — | — |
-
-Sarvam-Translate leads into every language, and only it writes Manipuri (Meitei Mayek), Santali (Ol Chiki), Bodo and
-Dogri (39.7-59.5 vs 0.4-8.3); into English Tiny Aya beats it on Hindi, Marathi and Urdu (+3.1 to +4.7, CIs above or
-touching zero). Its tokenizer spells Meitei Mayek mostly in bytes (1.83 tokens per character vs Hindi's 0.28), so a
-Manipuri translation takes ~6.5x the decode steps. Details, CIs and threats to validity in
-[`docs/bench/sarvam-translate.md`](docs/bench/sarvam-translate.md). Setup (ungated download, pinned revision; the
-answer keys are gitignored):
+The registry also has `gemma-3-4b-it`, the model Sarvam-Translate was fine-tuned from (same architecture, size and
+budgets). The translation study (Sarvam-Translate vs Gemma 3 4B-it vs IndicTrans2 on IN22-Gen, chrF++ in 22 languages
+both ways) lives in a separate repository, `indic-translation-bench`, which drives this engine as a library. Setup
+(ungated download, pinned revision; the answer keys are gitignored):
 
 ```bash
 scripts/.venv/bin/hf download sarvamai/sarvam-translate --revision e0a7a6bc21665b568c0c624986d422f6d7f58326 --local-dir models/sarvam-translate

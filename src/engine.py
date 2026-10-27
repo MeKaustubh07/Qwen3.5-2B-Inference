@@ -71,6 +71,17 @@ MODELS = {
                              kv_blocks=320, fork_budget=0,
                              per_backend={"metal-int8": dict(max_model_len=4096, kv_blocks=241, decide_max_len=1024),
                                           "metal-int4": dict(decide_max_len=4096)}),
+    # Gemma 3 4B-it, the base Sarvam-Translate was fine-tuned from: the same architecture, size and stops
+    # (generation_config.json), so Sarvam-Translate's budgets; sampling: generation_config's top_k / top_p at
+    # temperature 1. policy: written by scripts/calibrate_quant.py.
+    "gemma-3-4b-it": dict(dir="models/gemma-3-4b-it", family="gemma3", weights="model.safetensors.index.json",
+                          eos=[1, 106], chat="template", policy="configs/quant/gemma-3-4b-it.json",
+                          sampling=dict(temperature=1.0, top_p=0.95, top_k=64, repetition_penalty=1.0),
+                          max_model_len=8192, backends=("metal-int8", "metal-int4"),
+                          model_kwargs=dict(kv_dtype=torch.bfloat16, embed_scale_dtype=torch.bfloat16),
+                          kv_blocks=320, fork_budget=0,
+                          per_backend={"metal-int8": dict(max_model_len=4096, kv_blocks=241, decide_max_len=1024),
+                                       "metal-int4": dict(decide_max_len=4096)}),
 }
 FAMILIES = {"qwen3_5": (Qwen35Config, Qwen35Model),          # family -> (config class, model class)
             "cohere2": (Cohere2Config, Cohere2Model),

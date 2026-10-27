@@ -19,8 +19,10 @@ from quant import QtFile, QuantTensor, policy_group, quantize
 
 ROOT = Path(__file__).resolve().parent.parent
 GOLDEN = {"qwen3.5-0.8b": "tests/golden_qwen35", "qwen3.5-2b": "tests/golden_qwen35_2b",
-          "tiny-aya-global": "tests/golden_aya", "sarvam-translate": "models/sarvam-translate-calib/ref"}
-MAKE = {"tiny-aya-global": "scripts/golden_aya.py", "sarvam-translate": "scripts/golden_gemma3.py --calib"}
+          "tiny-aya-global": "tests/golden_aya", "sarvam-translate": "models/sarvam-translate-calib/ref",
+          "gemma-3-4b-it": "models/gemma-3-4b-it-calib/ref"}
+MAKE = {"tiny-aya-global": "golden_aya.py", "sarvam-translate": "golden_gemma3.py --calib",
+        "gemma-3-4b-it": "golden_gemma3.py models/gemma-3-4b-it --calib models/gemma-3-4b-it-calib/ref"}
 PACK_TOKENS = 512                   # tokens per packed prefill of a rows reference
 HEAD_ROWS, KL_ROWS = 128, 16        # rows through the head at a time; rows of 262K-wide KL temporaries at a time
 CURVE = (1, 2, 4, 8, 16, 24, 32, 48, 64, 80, 96, 112)    # prefixes of the per-byte ranking measured

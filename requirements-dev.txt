@@ -4,9 +4,3 @@ transformers==5.16.1
 tokenizers==0.23.1
 safetensors==0.8.0
 huggingface_hub==1.29.0
-sacrebleu==2.6.0         # scripts/eval_translate.py: chrF++ and its signature
-pyarrow==26.0.0          # scripts/eval_translate.py data: reads IN22-Gen's parquet
-# scripts/eval_translate_report.py, IN22-Gen's chrF++ protocol (IndicTrans2's compute_metrics.sh): IndicNLP's normalizer
-# and tokenizer, and urduhack's Urdu normalizer under it. Their declared dependencies (Sphinx, pandas; TensorFlow, with no
-# build for this Python) are not used, so they are installed without them (the report checks these versions):
-#   pip install --no-deps indic-nlp-library==0.92 urduhack==1.1.1

@@ -384,15 +384,13 @@ HF needs 15.5 GB for the text model in fp32. Both sides run one layer at a time.
 | KL gates 100x the measured values | margins over the measured values; the policy must stay under 0.9x flat INT4's KL (measured 0.81x, long key 0.70x) |
 | duplicated helpers, serial decode in the quant test, duplicated long-key code, a dead variable | helpers in `tests/serving_targets.py`; one prefill per prompt and teacher-forced + free sequences in one `decode_batch` (556 s, same numbers); `streamed_hf.long_rows` / `long_key` shared (Tiny Aya's long key bit-identical) |
 
-## Sarvam-Translate: the 22-language study (2026-10-24/25; `docs/bench/sarvam-translate.md`)
+## Sarvam-Translate: the 22-language study (2026-10-24/25; moved out 2026-10-27)
 
 | step | result |
 |---|---|
-| harness (`scripts/eval_translate.py`, `eval_translate_report.py`; `test_eval_translate` 51/51 on tiny models) | IN22-Gen, 50 sentences x 44 directions; chrF++ on IN22's own protocol (IndicNLP normalize + trivial_tokenize), paired bootstrap CIs resampled jointly over a macro row's languages, bits per character of the references, per-segment code versions. The review (8 findings, all confirmed and fixed): chrF++ of canonically equal text (NFC vs not) was 48.5, and macro CIs from independent languages 3.7x too narrow |
-| chrF++ (INT4 everywhere) | English -> X macro: Sarvam 50.4, Tiny Aya 26.7, Qwen3.5-2B 15.4 (Tiny Aya's 9: 53.3 / 44.4 / 24.3). X -> English: 52.2 / 40.5 / 33.8 (Tiny Aya's 9: 54.9 / 56.7 / 45.4). Tiny Aya ahead into English in Hindi +3.1 [+0.4, +6.1], Marathi +4.7 [+1.3, +8.5], Urdu +3.9 [+0.0, +7.6]. Into Manipuri, Santali, Bodo, Dogri the general models score 0.4-8.3 vs 39.7-59.5, almost none in the target's script |
-| bits per character | Sarvam INT8 vs INT4: -0.004 [-0.005, -0.004] into Indic, -0.003 [-0.009, +0.003] into English. Into English Tiny Aya's reference cost is lower than Sarvam's in all 9 of its languages (0.379 vs 0.515), most where Sarvam's own output departs from the reference (excess 0.236 vs 0.043 bits per character, worst vs best third); the end-token tables score `<end_of_turn>` for Sarvam, which stops with `<eos>` (median 27 nats) |
-| tokens per character | Sarvam: Hindi 0.281, Manipuri 1.830 (68.4% byte tokens), Santali 1.016 |
-| speed (partial) | Sarvam INT4 21.0 tok/s at batch 8 over 2,136 of 2,200 requests; Tiny Aya's and Qwen3.5's rows cover only their last, X -> English, segments |
+| harness | moved with its tests to the separate `indic-translation-bench` repository, which drives this engine as a library. The first study (Sarvam-Translate vs Tiny Aya Global and Qwen3.5-2B, all INT4) is superseded and kept only in this repository's history (`9eaa6eb`, `docs/bench/sarvam-translate.md`); the study now compares Sarvam-Translate with Gemma 3 4B-it and IndicTrans2 |
+| what it measured of the port | tokens per character on IN22-Gen: Hindi 0.281, Manipuri 1.830 (68.4% byte-fallback tokens), Santali 1.016. Bits per character, INT8 vs the calibrated INT4: -0.004 [-0.005, -0.004] into the Indic languages, -0.003 [-0.009, +0.003] into English. Speed (partial): INT4 21.0 tok/s at batch 8 over 2,136 of 2,200 requests |
+| registry `gemma-3-4b-it` (2026-10-27) | Gemma 3 4B-it, the base of the fine-tune, for the study: its config parses to the same `Gemma3Config` as Sarvam-Translate's (34 layers, window 1024, RoPE 10K local / 1M x 8 global), stops {1, 106} from its `generation_config.json`, so Sarvam-Translate's budgets; its INT4 policy is still to be calibrated |
 
 ## Review workflows run
 
