@@ -1,0 +1,1556 @@
+{
+ "model": "gemma-3-4b-it",
+ "scheme": "int4",
+ "rule": "KL per extra byte",
+ "reference": "models/gemma-3-4b-it-calib/ref",
+ "reference_sha256": "7c90f8f4e9b7670496ab97b69a4400f2c7d5ba762094feec4d08bfefed4598a7",
+ "split": "calib",
+ "baseline_kl_int8": 0.00205,
+ "average_kl_per_mb": 0.000225,
+ "keep_int8": [
+  "layers.0.mlp.down_proj.weight",
+  "layers.0.mlp.gate_up.weight",
+  "layers.0.self_attn.o_proj.weight",
+  "layers.0.self_attn.qkv.weight",
+  "layers.1.self_attn.o_proj.weight",
+  "layers.1.self_attn.qkv.weight",
+  "layers.11.self_attn.qkv.weight",
+  "layers.13.self_attn.qkv.weight",
+  "layers.17.self_attn.o_proj.weight",
+  "layers.17.self_attn.qkv.weight",
+  "layers.19.self_attn.qkv.weight",
+  "layers.2.self_attn.qkv.weight",
+  "layers.23.self_attn.qkv.weight",
+  "layers.3.mlp.down_proj.weight",
+  "layers.3.self_attn.o_proj.weight",
+  "layers.3.self_attn.qkv.weight",
+  "layers.4.self_attn.o_proj.weight",
+  "layers.4.self_attn.qkv.weight",
+  "layers.5.self_attn.qkv.weight",
+  "layers.6.self_attn.o_proj.weight",
+  "layers.6.self_attn.qkv.weight",
+  "layers.7.self_attn.qkv.weight",
+  "layers.8.self_attn.o_proj.weight",
+  "layers.8.self_attn.qkv.weight"
+ ],
+ "always_int8": [
+  "embed_tokens.weight"
+ ],
+ "choice": {
+  "chosen": {
+   "calib": 24,
+   "heldout": 0
+  },
+  "bootstrap": {
+   "calib": {
+    "0": 0.116,
+    "1": 0.352,
+    "2": 0.06,
+    "4": 0.001,
+    "8": 0.004,
+    "16": 0.158,
+    "24": 0.161,
+    "48": 0.02,
+    "64": 0.052,
+    "80": 0.076,
+    "96": 0.001
+   },
+   "heldout": {
+    "0": 0.625,
+    "1": 0.035,
+    "2": 0.019,
+    "4": 0.272,
+    "8": 0.005,
+    "16": 0.001,
+    "48": 0.005,
+    "64": 0.026,
+    "80": 0.011,
+    "96": 0.001
+   }
+  },
+  "resamples": 2000,
+  "note": "not resolved by this data: the rule keeps {'calib': 24, 'heldout': 0} tensors by split, and [0, 1, 4, 16, 24] each in 10%+ of the resamples; calib decides"
+ },
+ "curve": [
+  {
+   "n": 0,
+   "extra_bytes": 0,
+   "kl": 0.31792,
+   "by": {
+    "calib": 0.31792,
+    "calib/asm": 0.28633,
+    "calib/ben": 0.18977,
+    "calib/brx": 0.30099,
+    "calib/doi": 0.27514,
+    "calib/eng2x": 0.2849,
+    "calib/gom": 0.77324,
+    "calib/guj": 0.21018,
+    "calib/hin": 0.15771,
+    "calib/kan": 0.298,
+    "calib/kas": 0.6254,
+    "calib/mai": 0.31196,
+    "calib/mal": 0.28191,
+    "calib/mar": 0.14929,
+    "calib/mni": 0.34812,
+    "calib/npi": 0.2696,
+    "calib/ory": 0.3183,
+    "calib/pan": 0.305,
+    "calib/san": 0.40408,
+    "calib/sat": 0.49365,
+    "calib/snd": 0.50293,
+    "calib/tam": 0.10167,
+    "calib/tel": 0.37005,
+    "calib/urd": 0.18462,
+    "calib/x2eng": 0.36306,
+    "heldout": 0.35476,
+    "heldout/asm": 0.38118,
+    "heldout/ben": 0.28294,
+    "heldout/brx": 0.23031,
+    "heldout/doi": 0.391,
+    "heldout/eng2x": 0.31695,
+    "heldout/gom": 0.37109,
+    "heldout/guj": 0.17866,
+    "heldout/hin": 0.17441,
+    "heldout/kan": 0.37346,
+    "heldout/kas": 0.42489,
+    "heldout/mai": 0.69272,
+    "heldout/mal": 0.37391,
+    "heldout/mar": 0.37015,
+    "heldout/mni": 0.32258,
+    "heldout/npi": 0.22316,
+    "heldout/ory": 0.47611,
+    "heldout/pan": 0.33166,
+    "heldout/san": 0.46,
+    "heldout/sat": 0.3468,
+    "heldout/snd": 0.6715,
+    "heldout/tam": 0.09831,
+    "heldout/tel": 0.36816,
+    "heldout/urd": 0.25622,
+    "heldout/x2eng": 0.40767
+   }
+  },
+  {
+   "n": 1,
+   "extra_bytes": 2293760,
+   "kl": 0.31512,
+   "by": {
+    "calib": 0.31512,
+    "calib/asm": 0.29417,
+    "calib/ben": 0.18545,
+    "calib/brx": 0.30728,
+    "calib/doi": 0.26334,
+    "calib/eng2x": 0.28324,
+    "calib/gom": 0.76545,
+    "calib/guj": 0.2075,
+    "calib/hin": 0.15432,
+    "calib/kan": 0.29366,
+    "calib/kas": 0.60847,
+    "calib/mai": 0.3272,
+    "calib/mal": 0.27484,
+    "calib/mar": 0.15137,
+    "calib/mni": 0.34014,
+    "calib/npi": 0.26066,
+    "calib/ory": 0.33182,
+    "calib/pan": 0.30617,
+    "calib/san": 0.40921,
+    "calib/sat": 0.47142,
+    "calib/snd": 0.50219,
+    "calib/tam": 0.10599,
+    "calib/tel": 0.36213,
+    "calib/urd": 0.17617,
+    "calib/x2eng": 0.35869,
+    "heldout": 0.35481,
+    "heldout/asm": 0.37339,
+    "heldout/ben": 0.28239,
+    "heldout/brx": 0.23132,
+    "heldout/doi": 0.38843,
+    "heldout/eng2x": 0.31744,
+    "heldout/gom": 0.38305,
+    "heldout/guj": 0.17679,
+    "heldout/hin": 0.17671,
+    "heldout/kan": 0.36339,
+    "heldout/kas": 0.41676,
+    "heldout/mai": 0.69118,
+    "heldout/mal": 0.38057,
+    "heldout/mar": 0.37328,
+    "heldout/mni": 0.32082,
+    "heldout/npi": 0.22091,
+    "heldout/ory": 0.4648,
+    "heldout/pan": 0.33203,
+    "heldout/san": 0.48455,
+    "heldout/sat": 0.35761,
+    "heldout/snd": 0.66107,
+    "heldout/tam": 0.09895,
+    "heldout/tel": 0.35822,
+    "heldout/urd": 0.25332,
+    "heldout/x2eng": 0.4071
+   }
+  },
+  {
+   "n": 2,
+   "extra_bytes": 4587520,
+   "kl": 0.31411,
+   "by": {
+    "calib": 0.31411,
+    "calib/asm": 0.30277,
+    "calib/ben": 0.18011,
+    "calib/brx": 0.30287,
+    "calib/doi": 0.26184,
+    "calib/eng2x": 0.28291,
+    "calib/gom": 0.76797,
+    "calib/guj": 0.20332,
+    "calib/hin": 0.1514,
+    "calib/kan": 0.29402,
+    "calib/kas": 0.59821,
+    "calib/mai": 0.33298,
+    "calib/mal": 0.28429,
+    "calib/mar": 0.155,
+    "calib/mni": 0.3383,
+    "calib/npi": 0.25979,
+    "calib/ory": 0.33143,
+    "calib/pan": 0.30558,
+    "calib/san": 0.38621,
+    "calib/sat": 0.48532,
+    "calib/snd": 0.51216,
+    "calib/tam": 0.10436,
+    "calib/tel": 0.3553,
+    "calib/urd": 0.16715,
+    "calib/x2eng": 0.35674,
+    "heldout": 0.35294,
+    "heldout/asm": 0.37727,
+    "heldout/ben": 0.2754,
+    "heldout/brx": 0.23152,
+    "heldout/doi": 0.39161,
+    "heldout/eng2x": 0.31554,
+    "heldout/gom": 0.39229,
+    "heldout/guj": 0.17722,
+    "heldout/hin": 0.17292,
+    "heldout/kan": 0.34434,
+    "heldout/kas": 0.4119,
+    "heldout/mai": 0.68625,
+    "heldout/mal": 0.37827,
+    "heldout/mar": 0.372,
+    "heldout/mni": 0.31506,
+    "heldout/npi": 0.22106,
+    "heldout/ory": 0.44603,
+    "heldout/pan": 0.33095,
+    "heldout/san": 0.48795,
+    "heldout/sat": 0.34661,
+    "heldout/snd": 0.67245,
+    "heldout/tam": 0.09957,
+    "heldout/tel": 0.35622,
+    "heldout/urd": 0.25496,
+    "heldout/x2eng": 0.40527
+   }
+  },
+  {
+   "n": 4,
+   "extra_bytes": 11468800,
+   "kl": 0.30881,
+   "by": {
+    "calib": 0.30881,
+    "calib/asm": 0.30503,
+    "calib/ben": 0.19543,
+    "calib/brx": 0.31144,
+    "calib/doi": 0.24999,
+    "calib/eng2x": 0.27372,
+    "calib/gom": 0.76684,
+    "calib/guj": 0.205,
+    "calib/hin": 0.14366,
+    "calib/kan": 0.2786,
+    "calib/kas": 0.57312,
+    "calib/mai": 0.32597,
+    "calib/mal": 0.26328,
+    "calib/mar": 0.16418,
+    "calib/mni": 0.33057,
+    "calib/npi": 0.25196,
+    "calib/ory": 0.34439,
+    "calib/pan": 0.31041,
+    "calib/san": 0.36842,
+    "calib/sat": 0.45318,
+    "calib/snd": 0.49587,
+    "calib/tam": 0.1025,
+    "calib/tel": 0.34219,
+    "calib/urd": 0.18321,
+    "calib/x2eng": 0.35678,
+    "heldout": 0.3465,
+    "heldout/asm": 0.37031,
+    "heldout/ben": 0.27895,
+    "heldout/brx": 0.24268,
+    "heldout/doi": 0.38911,
+    "heldout/eng2x": 0.31315,
+    "heldout/gom": 0.4006,
+    "heldout/guj": 0.17534,
+    "heldout/hin": 0.17012,
+    "heldout/kan": 0.31728,
+    "heldout/kas": 0.42167,
+    "heldout/mai": 0.66034,
+    "heldout/mal": 0.37558,
+    "heldout/mar": 0.38577,
+    "heldout/mni": 0.32544,
+    "heldout/npi": 0.21162,
+    "heldout/ory": 0.42502,
+    "heldout/pan": 0.33168,
+    "heldout/san": 0.45076,
+    "heldout/sat": 0.3506,
+    "heldout/snd": 0.63483,
+    "heldout/tam": 0.09806,
+    "heldout/tel": 0.3399,
+    "heldout/urd": 0.24262,
+    "heldout/x2eng": 0.39319
+   }
+  },
+  {
+   "n": 8,
+   "extra_bytes": 27525120,
+   "kl": 0.28947,
+   "by": {
+    "calib": 0.28947,
+    "calib/asm": 0.27922,
+    "calib/ben": 0.19716,
+    "calib/brx": 0.30413,
+    "calib/doi": 0.24268,
+    "calib/eng2x": 0.26458,
+    "calib/gom": 0.70115,
+    "calib/guj": 0.21886,
+    "calib/hin": 0.14073,
+    "calib/kan": 0.25992,
+    "calib/kas": 0.54726,
+    "calib/mai": 0.25595,
+    "calib/mal": 0.20894,
+    "calib/mar": 0.15347,
+    "calib/mni": 0.31806,
+    "calib/npi": 0.24633,
+    "calib/ory": 0.28653,
+    "calib/pan": 0.28441,
+    "calib/san": 0.39188,
+    "calib/sat": 0.46566,
+    "calib/snd": 0.42622,
+    "calib/tam": 0.10841,
+    "calib/tel": 0.27526,
+    "calib/urd": 0.18352,
+    "calib/x2eng": 0.32349,
+    "heldout": 0.34939,
+    "heldout/asm": 0.37578,
+    "heldout/ben": 0.28021,
+    "heldout/brx": 0.22328,
+    "heldout/doi": 0.34123,
+    "heldout/eng2x": 0.30081,
+    "heldout/gom": 0.41975,
+    "heldout/guj": 0.18454,
+    "heldout/hin": 0.15442,
+    "heldout/kan": 0.35034,
+    "heldout/kas": 0.44008,
+    "heldout/mai": 0.70836,
+    "heldout/mal": 0.37634,
+    "heldout/mar": 0.33967,
+    "heldout/mni": 0.339,
+    "heldout/npi": 0.23337,
+    "heldout/ory": 0.44291,
+    "heldout/pan": 0.28821,
+    "heldout/san": 0.47559,
+    "heldout/sat": 0.35294,
+    "heldout/snd": 0.64732,
+    "heldout/tam": 0.10154,
+    "heldout/tel": 0.33785,
+    "heldout/urd": 0.25398,
+    "heldout/x2eng": 0.41736
+   }
+  },
+  {
+   "n": 16,
+   "extra_bytes": 59637760,
+   "kl": 0.26515,
+   "by": {
+    "calib": 0.26515,
+    "calib/asm": 0.25419,
+    "calib/ben": 0.17091,
+    "calib/brx": 0.27242,
+    "calib/doi": 0.21766,
+    "calib/eng2x": 0.23425,
+    "calib/gom": 0.61874,
+    "calib/guj": 0.18861,
+    "calib/hin": 0.12805,
+    "calib/kan": 0.25052,
+    "calib/kas": 0.52181,
+    "calib/mai": 0.26112,
+    "calib/mal": 0.18567,
+    "calib/mar": 0.15561,
+    "calib/mni": 0.31526,
+    "calib/npi": 0.21689,
+    "calib/ory": 0.37526,
+    "calib/pan": 0.23139,
+    "calib/san": 0.32308,
+    "calib/sat": 0.4374,
+    "calib/snd": 0.37178,
+    "calib/tam": 0.09308,
+    "calib/tel": 0.13189,
+    "calib/urd": 0.19827,
+    "calib/x2eng": 0.30739,
+    "heldout": 0.32548,
+    "heldout/asm": 0.3898,
+    "heldout/ben": 0.25166,
+    "heldout/brx": 0.1974,
+    "heldout/doi": 0.41073,
+    "heldout/eng2x": 0.2886,
+    "heldout/gom": 0.38682,
+    "heldout/guj": 0.20476,
+    "heldout/hin": 0.19551,
+    "heldout/kan": 0.33143,
+    "heldout/kas": 0.39291,
+    "heldout/mai": 0.59134,
+    "heldout/mal": 0.34154,
+    "heldout/mar": 0.34703,
+    "heldout/mni": 0.30124,
+    "heldout/npi": 0.20452,
+    "heldout/ory": 0.3282,
+    "heldout/pan": 0.24929,
+    "heldout/san": 0.44448,
+    "heldout/sat": 0.29256,
+    "heldout/snd": 0.62614,
+    "heldout/tam": 0.08252,
+    "heldout/tel": 0.32853,
+    "heldout/urd": 0.24915,
+    "heldout/x2eng": 0.37709
+   }
+  },
+  {
+   "n": 24,
+   "extra_bytes": 126156800,
+   "kl": 0.24512,
+   "by": {
+    "calib": 0.24512,
+    "calib/asm": 0.2986,
+    "calib/ben": 0.15053,
+    "calib/brx": 0.28131,
+    "calib/doi": 0.19936,
+    "calib/eng2x": 0.21459,
+    "calib/gom": 0.5597,
+    "calib/guj": 0.17107,
+    "calib/hin": 0.11368,
+    "calib/kan": 0.24039,
+    "calib/kas": 0.43484,
+    "calib/mai": 0.25526,
+    "calib/mal": 0.20356,
+    "calib/mar": 0.11715,
+    "calib/mni": 0.25873,
+    "calib/npi": 0.21291,
+    "calib/ory": 0.22183,
+    "calib/pan": 0.24116,
+    "calib/san": 0.29074,
+    "calib/sat": 0.29665,
+    "calib/snd": 0.46138,
+    "calib/tam": 0.11615,
+    "calib/tel": 0.17841,
+    "calib/urd": 0.20642,
+    "calib/x2eng": 0.28685,
+    "heldout": 0.28733,
+    "heldout/asm": 0.33404,
+    "heldout/ben": 0.20972,
+    "heldout/brx": 0.18933,
+    "heldout/doi": 0.36662,
+    "heldout/eng2x": 0.25112,
+    "heldout/gom": 0.38629,
+    "heldout/guj": 0.19171,
+    "heldout/hin": 0.13446,
+    "heldout/kan": 0.32259,
+    "heldout/kas": 0.37998,
+    "heldout/mai": 0.4397,
+    "heldout/mal": 0.2935,
+    "heldout/mar": 0.28972,
+    "heldout/mni": 0.27811,
+    "heldout/npi": 0.12832,
+    "heldout/ory": 0.37843,
+    "heldout/pan": 0.24862,
+    "heldout/san": 0.4161,
+    "heldout/sat": 0.29674,
+    "heldout/snd": 0.42507,
+    "heldout/tam": 0.07875,
+    "heldout/tel": 0.28168,
+    "heldout/urd": 0.23511,
+    "heldout/x2eng": 0.33801
+   }
+  },
+  {
+   "n": 32,
+   "extra_bytes": 172032000,
+   "kl": 0.23506,
+   "by": {
+    "calib": 0.23506,
+    "calib/asm": 0.29712,
+    "calib/ben": 0.16219,
+    "calib/brx": 0.21968,
+    "calib/doi": 0.22688,
+    "calib/eng2x": 0.20693,
+    "calib/gom": 0.50264,
+    "calib/guj": 0.1851,
+    "calib/hin": 0.11089,
+    "calib/kan": 0.21257,
+    "calib/kas": 0.44888,
+    "calib/mai": 0.25442,
+    "calib/mal": 0.20265,
+    "calib/mar": 0.12749,
+    "calib/mni": 0.23487,
+    "calib/npi": 0.18607,
+    "calib/ory": 0.15114,
+    "calib/pan": 0.21013,
+    "calib/san": 0.25347,
+    "calib/sat": 0.33682,
+    "calib/snd": 0.41594,
+    "calib/tam": 0.13437,
+    "calib/tel": 0.21977,
+    "calib/urd": 0.19993,
+    "calib/x2eng": 0.2735,
+    "heldout": 0.25974,
+    "heldout/asm": 0.28008,
+    "heldout/ben": 0.18997,
+    "heldout/brx": 0.16285,
+    "heldout/doi": 0.2947,
+    "heldout/eng2x": 0.226,
+    "heldout/gom": 0.31956,
+    "heldout/guj": 0.20314,
+    "heldout/hin": 0.1329,
+    "heldout/kan": 0.25897,
+    "heldout/kas": 0.33909,
+    "heldout/mai": 0.39857,
+    "heldout/mal": 0.24424,
+    "heldout/mar": 0.26222,
+    "heldout/mni": 0.29299,
+    "heldout/npi": 0.11476,
+    "heldout/ory": 0.34728,
+    "heldout/pan": 0.22347,
+    "heldout/san": 0.42547,
+    "heldout/sat": 0.25022,
+    "heldout/snd": 0.37876,
+    "heldout/tam": 0.07825,
+    "heldout/tel": 0.26871,
+    "heldout/urd": 0.22833,
+    "heldout/x2eng": 0.30695
+   }
+  },
+  {
+   "n": 48,
+   "extra_bytes": 293601280,
+   "kl": 0.18688,
+   "by": {
+    "calib": 0.18688,
+    "calib/asm": 0.25098,
+    "calib/ben": 0.1122,
+    "calib/brx": 0.1799,
+    "calib/doi": 0.13555,
+    "calib/eng2x": 0.17299,
+    "calib/gom": 0.3783,
+    "calib/guj": 0.18056,
+    "calib/hin": 0.1077,
+    "calib/kan": 0.17154,
+    "calib/kas": 0.28662,
+    "calib/mai": 0.20673,
+    "calib/mal": 0.15539,
+    "calib/mar": 0.10196,
+    "calib/mni": 0.17069,
+    "calib/npi": 0.19697,
+    "calib/ory": 0.12877,
+    "calib/pan": 0.12045,
+    "calib/san": 0.19391,
+    "calib/sat": 0.35616,
+    "calib/snd": 0.32451,
+    "calib/tam": 0.11482,
+    "calib/tel": 0.17306,
+    "calib/urd": 0.13858,
+    "calib/x2eng": 0.20588,
+    "heldout": 0.20272,
+    "heldout/asm": 0.18763,
+    "heldout/ben": 0.18895,
+    "heldout/brx": 0.13104,
+    "heldout/doi": 0.18795,
+    "heldout/eng2x": 0.18105,
+    "heldout/gom": 0.23638,
+    "heldout/guj": 0.12166,
+    "heldout/hin": 0.08928,
+    "heldout/kan": 0.17978,
+    "heldout/kas": 0.30452,
+    "heldout/mai": 0.33788,
+    "heldout/mal": 0.19919,
+    "heldout/mar": 0.17253,
+    "heldout/mni": 0.23608,
+    "heldout/npi": 0.09441,
+    "heldout/ory": 0.26296,
+    "heldout/pan": 0.16611,
+    "heldout/san": 0.3642,
+    "heldout/sat": 0.1974,
+    "heldout/snd": 0.30326,
+    "heldout/tam": 0.09547,
+    "heldout/tel": 0.21656,
+    "heldout/urd": 0.15478,
+    "heldout/x2eng": 0.23304
+   }
+  },
+  {
+   "n": 64,
+   "extra_bytes": 399114240,
+   "kl": 0.15609,
+   "by": {
+    "calib": 0.15609,
+    "calib/asm": 0.19745,
+    "calib/ben": 0.10133,
+    "calib/brx": 0.11389,
+    "calib/doi": 0.14375,
+    "calib/eng2x": 0.14745,
+    "calib/gom": 0.28472,
+    "calib/guj": 0.16142,
+    "calib/hin": 0.091,
+    "calib/kan": 0.13899,
+    "calib/kas": 0.26963,
+    "calib/mai": 0.14956,
+    "calib/mal": 0.1556,
+    "calib/mar": 0.07504,
+    "calib/mni": 0.14916,
+    "calib/npi": 0.13378,
+    "calib/ory": 0.10699,
+    "calib/pan": 0.1113,
+    "calib/san": 0.13753,
+    "calib/sat": 0.31741,
+    "calib/snd": 0.252,
+    "calib/tam": 0.10896,
+    "calib/tel": 0.18219,
+    "calib/urd": 0.12063,
+    "calib/x2eng": 0.1679,
+    "heldout": 0.166,
+    "heldout/asm": 0.14793,
+    "heldout/ben": 0.15249,
+    "heldout/brx": 0.12008,
+    "heldout/doi": 0.13371,
+    "heldout/eng2x": 0.15148,
+    "heldout/gom": 0.22559,
+    "heldout/guj": 0.08905,
+    "heldout/hin": 0.06883,
+    "heldout/kan": 0.17851,
+    "heldout/kas": 0.22465,
+    "heldout/mai": 0.2793,
+    "heldout/mal": 0.1711,
+    "heldout/mar": 0.1331,
+    "heldout/mni": 0.20167,
+    "heldout/npi": 0.12343,
+    "heldout/ory": 0.15714,
+    "heldout/pan": 0.13547,
+    "heldout/san": 0.26953,
+    "heldout/sat": 0.19027,
+    "heldout/snd": 0.2095,
+    "heldout/tam": 0.09152,
+    "heldout/tel": 0.22152,
+    "heldout/urd": 0.10787,
+    "heldout/x2eng": 0.18632
+   }
+  },
+  {
+   "n": 80,
+   "extra_bytes": 529858560,
+   "kl": 0.12292,
+   "by": {
+    "calib": 0.12292,
+    "calib/asm": 0.16699,
+    "calib/ben": 0.08805,
+    "calib/brx": 0.10327,
+    "calib/doi": 0.1151,
+    "calib/eng2x": 0.1056,
+    "calib/gom": 0.22284,
+    "calib/guj": 0.11695,
+    "calib/hin": 0.08703,
+    "calib/kan": 0.11138,
+    "calib/kas": 0.20243,
+    "calib/mai": 0.09667,
+    "calib/mal": 0.11327,
+    "calib/mar": 0.09335,
+    "calib/mni": 0.11568,
+    "calib/npi": 0.09128,
+    "calib/ory": 0.09191,
+    "calib/pan": 0.11657,
+    "calib/san": 0.13918,
+    "calib/sat": 0.18335,
+    "calib/snd": 0.18621,
+    "calib/tam": 0.11114,
+    "calib/tel": 0.1227,
+    "calib/urd": 0.07863,
+    "calib/x2eng": 0.14658,
+    "heldout": 0.13446,
+    "heldout/asm": 0.16489,
+    "heldout/ben": 0.11104,
+    "heldout/brx": 0.10416,
+    "heldout/doi": 0.10094,
+    "heldout/eng2x": 0.12076,
+    "heldout/gom": 0.18983,
+    "heldout/guj": 0.06091,
+    "heldout/hin": 0.06243,
+    "heldout/kan": 0.11959,
+    "heldout/kas": 0.17925,
+    "heldout/mai": 0.24417,
+    "heldout/mal": 0.11193,
+    "heldout/mar": 0.10361,
+    "heldout/mni": 0.17383,
+    "heldout/npi": 0.10048,
+    "heldout/ory": 0.15551,
+    "heldout/pan": 0.1256,
+    "heldout/san": 0.1588,
+    "heldout/sat": 0.1405,
+    "heldout/snd": 0.15054,
+    "heldout/tam": 0.09455,
+    "heldout/tel": 0.21754,
+    "heldout/urd": 0.11502,
+    "heldout/x2eng": 0.15363
+   }
+  },
+  {
+   "n": 96,
+   "extra_bytes": 752353280,
+   "kl": 0.08253,
+   "by": {
+    "calib": 0.08253,
+    "calib/asm": 0.11495,
+    "calib/ben": 0.07164,
+    "calib/brx": 0.06911,
+    "calib/doi": 0.09145,
+    "calib/eng2x": 0.06848,
+    "calib/gom": 0.18132,
+    "calib/guj": 0.05376,
+    "calib/hin": 0.06059,
+    "calib/kan": 0.06362,
+    "calib/kas": 0.12844,
+    "calib/mai": 0.04291,
+    "calib/mal": 0.06602,
+    "calib/mar": 0.07869,
+    "calib/mni": 0.04964,
+    "calib/npi": 0.04976,
+    "calib/ory": 0.07198,
+    "calib/pan": 0.05744,
+    "calib/san": 0.10591,
+    "calib/sat": 0.14285,
+    "calib/snd": 0.12176,
+    "calib/tam": 0.09186,
+    "calib/tel": 0.0686,
+    "calib/urd": 0.07262,
+    "calib/x2eng": 0.10174,
+    "heldout": 0.08692,
+    "heldout/asm": 0.12691,
+    "heldout/ben": 0.07338,
+    "heldout/brx": 0.07369,
+    "heldout/doi": 0.06822,
+    "heldout/eng2x": 0.07592,
+    "heldout/gom": 0.10718,
+    "heldout/guj": 0.05437,
+    "heldout/hin": 0.0347,
+    "heldout/kan": 0.07226,
+    "heldout/kas": 0.14842,
+    "heldout/mai": 0.16375,
+    "heldout/mal": 0.08321,
+    "heldout/mar": 0.06393,
+    "heldout/mni": 0.10244,
+    "heldout/npi": 0.06429,
+    "heldout/ory": 0.06953,
+    "heldout/pan": 0.0643,
+    "heldout/san": 0.12033,
+    "heldout/sat": 0.09882,
+    "heldout/snd": 0.08622,
+    "heldout/tam": 0.06189,
+    "heldout/tel": 0.0911,
+    "heldout/urd": 0.08005,
+    "heldout/x2eng": 0.10231
+   }
+  },
+  {
+   "n": 112,
+   "extra_bytes": 997785600,
+   "kl": 0.04688,
+   "by": {
+    "calib": 0.04688,
+    "calib/asm": 0.07532,
+    "calib/ben": 0.04698,
+    "calib/brx": 0.04015,
+    "calib/doi": 0.05462,
+    "calib/eng2x": 0.04266,
+    "calib/gom": 0.10295,
+    "calib/guj": 0.03732,
+    "calib/hin": 0.03409,
+    "calib/kan": 0.03707,
+    "calib/kas": 0.0639,
+    "calib/mai": 0.04083,
+    "calib/mal": 0.03425,
+    "calib/mar": 0.0333,
+    "calib/mni": 0.0296,
+    "calib/npi": 0.02548,
+    "calib/ory": 0.03086,
+    "calib/pan": 0.03338,
+    "calib/san": 0.07451,
+    "calib/sat": 0.0477,
+    "calib/snd": 0.05966,
+    "calib/tam": 0.04463,
+    "calib/tel": 0.0317,
+    "calib/urd": 0.06984,
+    "calib/x2eng": 0.05265,
+    "heldout": 0.05088,
+    "heldout/asm": 0.08326,
+    "heldout/ben": 0.03572,
+    "heldout/brx": 0.03529,
+    "heldout/doi": 0.0546,
+    "heldout/eng2x": 0.0451,
+    "heldout/gom": 0.08105,
+    "heldout/guj": 0.02373,
+    "heldout/hin": 0.03843,
+    "heldout/kan": 0.03272,
+    "heldout/kas": 0.08334,
+    "heldout/mai": 0.08089,
+    "heldout/mal": 0.06361,
+    "heldout/mar": 0.03783,
+    "heldout/mni": 0.05314,
+    "heldout/npi": 0.02704,
+    "heldout/ory": 0.04391,
+    "heldout/pan": 0.05318,
+    "heldout/san": 0.06397,
+    "heldout/sat": 0.04798,
+    "heldout/snd": 0.0548,
+    "heldout/tam": 0.02624,
+    "heldout/tel": 0.05713,
+    "heldout/urd": 0.04981,
+    "heldout/x2eng": 0.05897
+   }
+  },
+  {
+   "n": 136,
+   "extra_bytes": 1403781120,
+   "kl": 0.00205,
+   "by": {
+    "calib": 0.00205,
+    "calib/asm": 0.00134,
+    "calib/ben": 0.00217,
+    "calib/brx": 0.00154,
+    "calib/doi": 0.00235,
+    "calib/eng2x": 0.00176,
+    "calib/gom": 0.00465,
+    "calib/guj": 0.00103,
+    "calib/hin": 0.00134,
+    "calib/kan": 0.00167,
+    "calib/kas": 0.00428,
+    "calib/mai": 0.00155,
+    "calib/mal": 0.00234,
+    "calib/mar": 0.00127,
+    "calib/mni": 0.00212,
+    "calib/npi": 0.00223,
+    "calib/ory": 0.00113,
+    "calib/pan": 0.00172,
+    "calib/san": 0.00163,
+    "calib/sat": 0.00196,
+    "calib/snd": 0.00353,
+    "calib/tam": 0.00065,
+    "calib/tel": 0.00178,
+    "calib/urd": 0.00344,
+    "calib/x2eng": 0.00244,
+    "heldout": 0.00357,
+    "heldout/asm": 0.003,
+    "heldout/ben": 0.00295,
+    "heldout/brx": 0.00151,
+    "heldout/doi": 0.01079,
+    "heldout/eng2x": 0.00205,
+    "heldout/gom": 0.00438,
+    "heldout/guj": 0.00091,
+    "heldout/hin": 0.00219,
+    "heldout/kan": 0.0021,
+    "heldout/kas": 0.00392,
+    "heldout/mai": 0.00244,
+    "heldout/mal": 0.0139,
+    "heldout/mar": 0.00302,
+    "heldout/mni": 0.00238,
+    "heldout/npi": 0.00076,
+    "heldout/ory": 0.00246,
+    "heldout/pan": 0.00229,
+    "heldout/san": 0.00683,
+    "heldout/sat": 0.00347,
+    "heldout/snd": 0.00455,
+    "heldout/tam": 0.00073,
+    "heldout/tel": 0.00257,
+    "heldout/urd": 0.0011,
+    "heldout/x2eng": 0.00571
+   }
+  }
+ ],
+ "damage": {
+  "layers.1.self_attn.o_proj.weight": {
+   "kl": 0.0045815,
+   "extra_bytes": 2293760,
+   "kl_per_mb": 0.0019974
+  },
+  "layers.6.self_attn.o_proj.weight": {
+   "kl": 0.003986,
+   "extra_bytes": 2293760,
+   "kl_per_mb": 0.0017378
+  },
+  "layers.4.self_attn.o_proj.weight": {
+   "kl": 0.0037577,
+   "extra_bytes": 2293760,
+   "kl_per_mb": 0.0016382
+  },
+  "layers.7.self_attn.qkv.weight": {
+   "kl": 0.0071721,
+   "extra_bytes": 4587520,
+   "kl_per_mb": 0.0015634
+  },
+  "layers.3.self_attn.o_proj.weight": {
+   "kl": 0.0035108,
+   "extra_bytes": 2293760,
+   "kl_per_mb": 0.0015306
+  },
+  "layers.1.self_attn.qkv.weight": {
+   "kl": 0.0060275,
+   "extra_bytes": 4587520,
+   "kl_per_mb": 0.0013139
+  },
+  "layers.17.self_attn.qkv.weight": {
+   "kl": 0.0059952,
+   "extra_bytes": 4587520,
+   "kl_per_mb": 0.0013068
+  },
+  "layers.3.self_attn.qkv.weight": {
+   "kl": 0.0056746,
+   "extra_bytes": 4587520,
+   "kl_per_mb": 0.001237
+  },
+  "layers.6.self_attn.qkv.weight": {
+   "kl": 0.0055282,
+   "extra_bytes": 4587520,
+   "kl_per_mb": 0.0012051
+  },
+  "layers.8.self_attn.o_proj.weight": {
+   "kl": 0.0025529,
+   "extra_bytes": 2293760,
+   "kl_per_mb": 0.001113
+  },
+  "layers.11.self_attn.qkv.weight": {
+   "kl": 0.0049592,
+   "extra_bytes": 4587520,
+   "kl_per_mb": 0.001081
+  },
+  "layers.5.self_attn.qkv.weight": {
+   "kl": 0.0049052,
+   "extra_bytes": 4587520,
+   "kl_per_mb": 0.0010692
+  },
+  "layers.0.self_attn.o_proj.weight": {
+   "kl": 0.0024308,
+   "extra_bytes": 2293760,
+   "kl_per_mb": 0.0010597
+  },
+  "layers.4.self_attn.qkv.weight": {
+   "kl": 0.0047678,
+   "extra_bytes": 4587520,
+   "kl_per_mb": 0.0010393
+  },
+  "layers.13.self_attn.qkv.weight": {
+   "kl": 0.004668,
+   "extra_bytes": 4587520,
+   "kl_per_mb": 0.0010175
+  },
+  "layers.23.self_attn.qkv.weight": {
+   "kl": 0.0046522,
+   "extra_bytes": 4587520,
+   "kl_per_mb": 0.0010141
+  },
+  "layers.17.self_attn.o_proj.weight": {
+   "kl": 0.0021806,
+   "extra_bytes": 2293760,
+   "kl_per_mb": 0.0009507
+  },
+  "layers.0.mlp.down_proj.weight": {
+   "kl": 0.0105224,
+   "extra_bytes": 11468800,
+   "kl_per_mb": 0.0009175
+  },
+  "layers.0.self_attn.qkv.weight": {
+   "kl": 0.0040044,
+   "extra_bytes": 4587520,
+   "kl_per_mb": 0.0008729
+  },
+  "layers.2.self_attn.qkv.weight": {
+   "kl": 0.003607,
+   "extra_bytes": 4587520,
+   "kl_per_mb": 0.0007863
+  },
+  "layers.8.self_attn.qkv.weight": {
+   "kl": 0.0034806,
+   "extra_bytes": 4587520,
+   "kl_per_mb": 0.0007587
+  },
+  "layers.3.mlp.down_proj.weight": {
+   "kl": 0.008623,
+   "extra_bytes": 11468800,
+   "kl_per_mb": 0.0007519
+  },
+  "layers.19.self_attn.qkv.weight": {
+   "kl": 0.0033289,
+   "extra_bytes": 4587520,
+   "kl_per_mb": 0.0007256
+  },
+  "layers.0.mlp.gate_up.weight": {
+   "kl": 0.016379,
+   "extra_bytes": 22937600,
+   "kl_per_mb": 0.0007141
+  },
+  "layers.10.self_attn.qkv.weight": {
+   "kl": 0.0031411,
+   "extra_bytes": 4587520,
+   "kl_per_mb": 0.0006847
+  },
+  "layers.5.mlp.down_proj.weight": {
+   "kl": 0.0074435,
+   "extra_bytes": 11468800,
+   "kl_per_mb": 0.000649
+  },
+  "layers.2.mlp.down_proj.weight": {
+   "kl": 0.0070498,
+   "extra_bytes": 11468800,
+   "kl_per_mb": 0.0006147
+  },
+  "layers.13.self_attn.o_proj.weight": {
+   "kl": 0.001408,
+   "extra_bytes": 2293760,
+   "kl_per_mb": 0.0006138
+  },
+  "layers.15.self_attn.qkv.weight": {
+   "kl": 0.0028102,
+   "extra_bytes": 4587520,
+   "kl_per_mb": 0.0006126
+  },
+  "layers.14.self_attn.qkv.weight": {
+   "kl": 0.0026996,
+   "extra_bytes": 4587520,
+   "kl_per_mb": 0.0005885
+  },
+  "layers.2.self_attn.o_proj.weight": {
+   "kl": 0.0013166,
+   "extra_bytes": 2293760,
+   "kl_per_mb": 0.000574
+  },
+  "layers.12.self_attn.qkv.weight": {
+   "kl": 0.0026296,
+   "extra_bytes": 4587520,
+   "kl_per_mb": 0.0005732
+  },
+  "layers.2.mlp.gate_up.weight": {
+   "kl": 0.0125813,
+   "extra_bytes": 22937600,
+   "kl_per_mb": 0.0005485
+  },
+  "layers.20.self_attn.qkv.weight": {
+   "kl": 0.0025021,
+   "extra_bytes": 4587520,
+   "kl_per_mb": 0.0005454
+  },
+  "layers.33.self_attn.qkv.weight": {
+   "kl": 0.0024583,
+   "extra_bytes": 4587520,
+   "kl_per_mb": 0.0005359
+  },
+  "layers.9.self_attn.qkv.weight": {
+   "kl": 0.0024448,
+   "extra_bytes": 4587520,
+   "kl_per_mb": 0.0005329
+  },
+  "layers.12.self_attn.o_proj.weight": {
+   "kl": 0.0012076,
+   "extra_bytes": 2293760,
+   "kl_per_mb": 0.0005265
+  },
+  "layers.22.self_attn.qkv.weight": {
+   "kl": 0.00239,
+   "extra_bytes": 4587520,
+   "kl_per_mb": 0.000521
+  },
+  "layers.11.self_attn.o_proj.weight": {
+   "kl": 0.0011755,
+   "extra_bytes": 2293760,
+   "kl_per_mb": 0.0005125
+  },
+  "layers.23.self_attn.o_proj.weight": {
+   "kl": 0.001175,
+   "extra_bytes": 2293760,
+   "kl_per_mb": 0.0005123
+  },
+  "layers.16.self_attn.qkv.weight": {
+   "kl": 0.0022829,
+   "extra_bytes": 4587520,
+   "kl_per_mb": 0.0004976
+  },
+  "layers.7.mlp.down_proj.weight": {
+   "kl": 0.0056425,
+   "extra_bytes": 11468800,
+   "kl_per_mb": 0.000492
+  },
+  "layers.7.self_attn.o_proj.weight": {
+   "kl": 0.0011026,
+   "extra_bytes": 2293760,
+   "kl_per_mb": 0.0004807
+  },
+  "layers.21.self_attn.qkv.weight": {
+   "kl": 0.0020944,
+   "extra_bytes": 4587520,
+   "kl_per_mb": 0.0004565
+  },
+  "layers.22.self_attn.o_proj.weight": {
+   "kl": 0.0010349,
+   "extra_bytes": 2293760,
+   "kl_per_mb": 0.0004512
+  },
+  "layers.14.self_attn.o_proj.weight": {
+   "kl": 0.0010327,
+   "extra_bytes": 2293760,
+   "kl_per_mb": 0.0004502
+  },
+  "layers.5.mlp.gate_up.weight": {
+   "kl": 0.0101798,
+   "extra_bytes": 22937600,
+   "kl_per_mb": 0.0004438
+  },
+  "layers.3.mlp.gate_up.weight": {
+   "kl": 0.0099201,
+   "extra_bytes": 22937600,
+   "kl_per_mb": 0.0004325
+  },
+  "layers.18.self_attn.qkv.weight": {
+   "kl": 0.0019019,
+   "extra_bytes": 4587520,
+   "kl_per_mb": 0.0004146
+  },
+  "layers.24.self_attn.o_proj.weight": {
+   "kl": 0.0009433,
+   "extra_bytes": 2293760,
+   "kl_per_mb": 0.0004112
+  },
+  "layers.1.mlp.down_proj.weight": {
+   "kl": 0.0046694,
+   "extra_bytes": 11468800,
+   "kl_per_mb": 0.0004071
+  },
+  "layers.10.self_attn.o_proj.weight": {
+   "kl": 0.0009318,
+   "extra_bytes": 2293760,
+   "kl_per_mb": 0.0004062
+  },
+  "layers.24.self_attn.qkv.weight": {
+   "kl": 0.0018357,
+   "extra_bytes": 4587520,
+   "kl_per_mb": 0.0004002
+  },
+  "layers.22.mlp.down_proj.weight": {
+   "kl": 0.0045239,
+   "extra_bytes": 11468800,
+   "kl_per_mb": 0.0003945
+  },
+  "layers.9.self_attn.o_proj.weight": {
+   "kl": 0.0009,
+   "extra_bytes": 2293760,
+   "kl_per_mb": 0.0003924
+  },
+  "layers.1.mlp.gate_up.weight": {
+   "kl": 0.0089694,
+   "extra_bytes": 22937600,
+   "kl_per_mb": 0.000391
+  },
+  "layers.5.self_attn.o_proj.weight": {
+   "kl": 0.000872,
+   "extra_bytes": 2293760,
+   "kl_per_mb": 0.0003802
+  },
+  "layers.15.self_attn.o_proj.weight": {
+   "kl": 0.0008504,
+   "extra_bytes": 2293760,
+   "kl_per_mb": 0.0003707
+  },
+  "layers.18.self_attn.o_proj.weight": {
+   "kl": 0.0008492,
+   "extra_bytes": 2293760,
+   "kl_per_mb": 0.0003702
+  },
+  "layers.6.mlp.gate_up.weight": {
+   "kl": 0.0084024,
+   "extra_bytes": 22937600,
+   "kl_per_mb": 0.0003663
+  },
+  "layers.16.self_attn.o_proj.weight": {
+   "kl": 0.0008086,
+   "extra_bytes": 2293760,
+   "kl_per_mb": 0.0003525
+  },
+  "layers.31.self_attn.o_proj.weight": {
+   "kl": 0.0007879,
+   "extra_bytes": 2293760,
+   "kl_per_mb": 0.0003435
+  },
+  "layers.29.self_attn.qkv.weight": {
+   "kl": 0.0015581,
+   "extra_bytes": 4587520,
+   "kl_per_mb": 0.0003396
+  },
+  "layers.32.self_attn.qkv.weight": {
+   "kl": 0.0015557,
+   "extra_bytes": 4587520,
+   "kl_per_mb": 0.0003391
+  },
+  "layers.4.mlp.down_proj.weight": {
+   "kl": 0.0036605,
+   "extra_bytes": 11468800,
+   "kl_per_mb": 0.0003192
+  },
+  "layers.31.self_attn.qkv.weight": {
+   "kl": 0.00142,
+   "extra_bytes": 4587520,
+   "kl_per_mb": 0.0003095
+  },
+  "layers.25.self_attn.qkv.weight": {
+   "kl": 0.0014081,
+   "extra_bytes": 4587520,
+   "kl_per_mb": 0.0003069
+  },
+  "layers.33.mlp.down_proj.weight": {
+   "kl": 0.0034687,
+   "extra_bytes": 11468800,
+   "kl_per_mb": 0.0003024
+  },
+  "layers.4.mlp.gate_up.weight": {
+   "kl": 0.0068303,
+   "extra_bytes": 22937600,
+   "kl_per_mb": 0.0002978
+  },
+  "layers.27.self_attn.qkv.weight": {
+   "kl": 0.0013497,
+   "extra_bytes": 4587520,
+   "kl_per_mb": 0.0002942
+  },
+  "layers.20.self_attn.o_proj.weight": {
+   "kl": 0.0006744,
+   "extra_bytes": 2293760,
+   "kl_per_mb": 0.000294
+  },
+  "layers.6.mlp.down_proj.weight": {
+   "kl": 0.0032352,
+   "extra_bytes": 11468800,
+   "kl_per_mb": 0.0002821
+  },
+  "layers.21.mlp.down_proj.weight": {
+   "kl": 0.003035,
+   "extra_bytes": 11468800,
+   "kl_per_mb": 0.0002646
+  },
+  "layers.10.mlp.down_proj.weight": {
+   "kl": 0.0029997,
+   "extra_bytes": 11468800,
+   "kl_per_mb": 0.0002616
+  },
+  "layers.33.self_attn.o_proj.weight": {
+   "kl": 0.0005929,
+   "extra_bytes": 2293760,
+   "kl_per_mb": 0.0002585
+  },
+  "layers.23.mlp.down_proj.weight": {
+   "kl": 0.0029621,
+   "extra_bytes": 11468800,
+   "kl_per_mb": 0.0002583
+  },
+  "layers.32.self_attn.o_proj.weight": {
+   "kl": 0.0005879,
+   "extra_bytes": 2293760,
+   "kl_per_mb": 0.0002563
+  },
+  "layers.19.self_attn.o_proj.weight": {
+   "kl": 0.0005849,
+   "extra_bytes": 2293760,
+   "kl_per_mb": 0.000255
+  },
+  "layers.25.mlp.down_proj.weight": {
+   "kl": 0.0028379,
+   "extra_bytes": 11468800,
+   "kl_per_mb": 0.0002474
+  },
+  "layers.30.self_attn.qkv.weight": {
+   "kl": 0.0011324,
+   "extra_bytes": 4587520,
+   "kl_per_mb": 0.0002468
+  },
+  "layers.32.mlp.down_proj.weight": {
+   "kl": 0.0028112,
+   "extra_bytes": 11468800,
+   "kl_per_mb": 0.0002451
+  },
+  "layers.26.self_attn.qkv.weight": {
+   "kl": 0.0010682,
+   "extra_bytes": 4587520,
+   "kl_per_mb": 0.0002328
+  },
+  "layers.26.mlp.down_proj.weight": {
+   "kl": 0.0025742,
+   "extra_bytes": 11468800,
+   "kl_per_mb": 0.0002245
+  },
+  "layers.24.mlp.down_proj.weight": {
+   "kl": 0.0025459,
+   "extra_bytes": 11468800,
+   "kl_per_mb": 0.000222
+  },
+  "layers.16.mlp.down_proj.weight": {
+   "kl": 0.0023844,
+   "extra_bytes": 11468800,
+   "kl_per_mb": 0.0002079
+  },
+  "layers.8.mlp.down_proj.weight": {
+   "kl": 0.0023504,
+   "extra_bytes": 11468800,
+   "kl_per_mb": 0.0002049
+  },
+  "layers.33.mlp.gate_up.weight": {
+   "kl": 0.0046768,
+   "extra_bytes": 22937600,
+   "kl_per_mb": 0.0002039
+  },
+  "layers.15.mlp.down_proj.weight": {
+   "kl": 0.0022852,
+   "extra_bytes": 11468800,
+   "kl_per_mb": 0.0001993
+  },
+  "layers.27.mlp.down_proj.weight": {
+   "kl": 0.0021884,
+   "extra_bytes": 11468800,
+   "kl_per_mb": 0.0001908
+  },
+  "layers.14.mlp.down_proj.weight": {
+   "kl": 0.0021852,
+   "extra_bytes": 11468800,
+   "kl_per_mb": 0.0001905
+  },
+  "layers.7.mlp.gate_up.weight": {
+   "kl": 0.0042692,
+   "extra_bytes": 22937600,
+   "kl_per_mb": 0.0001861
+  },
+  "layers.20.mlp.down_proj.weight": {
+   "kl": 0.0021257,
+   "extra_bytes": 11468800,
+   "kl_per_mb": 0.0001853
+  },
+  "layers.13.mlp.down_proj.weight": {
+   "kl": 0.0020971,
+   "extra_bytes": 11468800,
+   "kl_per_mb": 0.0001829
+  },
+  "layers.9.mlp.down_proj.weight": {
+   "kl": 0.0020817,
+   "extra_bytes": 11468800,
+   "kl_per_mb": 0.0001815
+  },
+  "layers.24.mlp.gate_up.weight": {
+   "kl": 0.0041532,
+   "extra_bytes": 22937600,
+   "kl_per_mb": 0.0001811
+  },
+  "layers.8.mlp.gate_up.weight": {
+   "kl": 0.0041098,
+   "extra_bytes": 22937600,
+   "kl_per_mb": 0.0001792
+  },
+  "layers.12.mlp.down_proj.weight": {
+   "kl": 0.0020228,
+   "extra_bytes": 11468800,
+   "kl_per_mb": 0.0001764
+  },
+  "layers.9.mlp.gate_up.weight": {
+   "kl": 0.004011,
+   "extra_bytes": 22937600,
+   "kl_per_mb": 0.0001749
+  },
+  "layers.28.mlp.down_proj.weight": {
+   "kl": 0.001981,
+   "extra_bytes": 11468800,
+   "kl_per_mb": 0.0001727
+  },
+  "layers.18.mlp.down_proj.weight": {
+   "kl": 0.0018062,
+   "extra_bytes": 11468800,
+   "kl_per_mb": 0.0001575
+  },
+  "layers.22.mlp.gate_up.weight": {
+   "kl": 0.0036022,
+   "extra_bytes": 22937600,
+   "kl_per_mb": 0.000157
+  },
+  "layers.11.mlp.gate_up.weight": {
+   "kl": 0.0035116,
+   "extra_bytes": 22937600,
+   "kl_per_mb": 0.0001531
+  },
+  "layers.29.mlp.down_proj.weight": {
+   "kl": 0.0017535,
+   "extra_bytes": 11468800,
+   "kl_per_mb": 0.0001529
+  },
+  "layers.19.mlp.down_proj.weight": {
+   "kl": 0.0017515,
+   "extra_bytes": 11468800,
+   "kl_per_mb": 0.0001527
+  },
+  "layers.31.mlp.down_proj.weight": {
+   "kl": 0.0017276,
+   "extra_bytes": 11468800,
+   "kl_per_mb": 0.0001506
+  },
+  "layers.25.mlp.gate_up.weight": {
+   "kl": 0.0033666,
+   "extra_bytes": 22937600,
+   "kl_per_mb": 0.0001468
+  },
+  "layers.30.mlp.down_proj.weight": {
+   "kl": 0.0016123,
+   "extra_bytes": 11468800,
+   "kl_per_mb": 0.0001406
+  },
+  "layers.28.self_attn.qkv.weight": {
+   "kl": 0.0006315,
+   "extra_bytes": 4587520,
+   "kl_per_mb": 0.0001377
+  },
+  "layers.11.mlp.down_proj.weight": {
+   "kl": 0.0015719,
+   "extra_bytes": 11468800,
+   "kl_per_mb": 0.0001371
+  },
+  "layers.17.mlp.down_proj.weight": {
+   "kl": 0.0015574,
+   "extra_bytes": 11468800,
+   "kl_per_mb": 0.0001358
+  },
+  "layers.18.mlp.gate_up.weight": {
+   "kl": 0.0030056,
+   "extra_bytes": 22937600,
+   "kl_per_mb": 0.000131
+  },
+  "layers.14.mlp.gate_up.weight": {
+   "kl": 0.0029638,
+   "extra_bytes": 22937600,
+   "kl_per_mb": 0.0001292
+  },
+  "layers.25.self_attn.o_proj.weight": {
+   "kl": 0.0002959,
+   "extra_bytes": 2293760,
+   "kl_per_mb": 0.000129
+  },
+  "layers.10.mlp.gate_up.weight": {
+   "kl": 0.0029285,
+   "extra_bytes": 22937600,
+   "kl_per_mb": 0.0001277
+  },
+  "layers.26.self_attn.o_proj.weight": {
+   "kl": 0.000292,
+   "extra_bytes": 2293760,
+   "kl_per_mb": 0.0001273
+  },
+  "layers.21.mlp.gate_up.weight": {
+   "kl": 0.0029199,
+   "extra_bytes": 22937600,
+   "kl_per_mb": 0.0001273
+  },
+  "layers.20.mlp.gate_up.weight": {
+   "kl": 0.0028799,
+   "extra_bytes": 22937600,
+   "kl_per_mb": 0.0001256
+  },
+  "layers.27.mlp.gate_up.weight": {
+   "kl": 0.0028588,
+   "extra_bytes": 22937600,
+   "kl_per_mb": 0.0001246
+  },
+  "layers.17.mlp.gate_up.weight": {
+   "kl": 0.0028475,
+   "extra_bytes": 22937600,
+   "kl_per_mb": 0.0001241
+  },
+  "layers.23.mlp.gate_up.weight": {
+   "kl": 0.0027712,
+   "extra_bytes": 22937600,
+   "kl_per_mb": 0.0001208
+  },
+  "layers.21.self_attn.o_proj.weight": {
+   "kl": 0.000265,
+   "extra_bytes": 2293760,
+   "kl_per_mb": 0.0001155
+  },
+  "layers.32.mlp.gate_up.weight": {
+   "kl": 0.0026385,
+   "extra_bytes": 22937600,
+   "kl_per_mb": 0.000115
+  },
+  "layers.19.mlp.gate_up.weight": {
+   "kl": 0.0025022,
+   "extra_bytes": 22937600,
+   "kl_per_mb": 0.0001091
+  },
+  "layers.26.mlp.gate_up.weight": {
+   "kl": 0.002407,
+   "extra_bytes": 22937600,
+   "kl_per_mb": 0.0001049
+  },
+  "layers.13.mlp.gate_up.weight": {
+   "kl": 0.0023729,
+   "extra_bytes": 22937600,
+   "kl_per_mb": 0.0001035
+  },
+  "layers.28.mlp.gate_up.weight": {
+   "kl": 0.0023679,
+   "extra_bytes": 22937600,
+   "kl_per_mb": 0.0001032
+  },
+  "layers.16.mlp.gate_up.weight": {
+   "kl": 0.0023658,
+   "extra_bytes": 22937600,
+   "kl_per_mb": 0.0001031
+  },
+  "layers.27.self_attn.o_proj.weight": {
+   "kl": 0.0002365,
+   "extra_bytes": 2293760,
+   "kl_per_mb": 0.0001031
+  },
+  "layers.29.mlp.gate_up.weight": {
+   "kl": 0.0022594,
+   "extra_bytes": 22937600,
+   "kl_per_mb": 9.85e-05
+  },
+  "layers.12.mlp.gate_up.weight": {
+   "kl": 0.0022475,
+   "extra_bytes": 22937600,
+   "kl_per_mb": 9.8e-05
+  },
+  "layers.15.mlp.gate_up.weight": {
+   "kl": 0.0022212,
+   "extra_bytes": 22937600,
+   "kl_per_mb": 9.68e-05
+  },
+  "layers.30.self_attn.o_proj.weight": {
+   "kl": 0.0002209,
+   "extra_bytes": 2293760,
+   "kl_per_mb": 9.63e-05
+  },
+  "layers.29.self_attn.o_proj.weight": {
+   "kl": 0.0002168,
+   "extra_bytes": 2293760,
+   "kl_per_mb": 9.45e-05
+  },
+  "layers.31.mlp.gate_up.weight": {
+   "kl": 0.0019843,
+   "extra_bytes": 22937600,
+   "kl_per_mb": 8.65e-05
+  },
+  "layers.30.mlp.gate_up.weight": {
+   "kl": 0.0016617,
+   "extra_bytes": 22937600,
+   "kl_per_mb": 7.24e-05
+  },
+  "layers.28.self_attn.o_proj.weight": {
+   "kl": 0.0001618,
+   "extra_bytes": 2293760,
+   "kl_per_mb": 7.05e-05
+  }
+ }
+}
