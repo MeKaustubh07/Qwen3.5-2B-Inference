@@ -1,0 +1,10 @@
+== policy qwen3.5-2b none
+qwen3.5-2b INT4, keep INT8: (embedding only)
+ar: KLD 0.1198 (median 0.0885, p99 0.673) same top 76.3% ln(PPL ratio) +0.1226 PPL 34.43 vs 30.46  [19 s]
+de: KLD 0.0708 (median 0.0576, p99 0.328) same top 83.5% ln(PPL ratio) +0.0779 PPL 17.67 vs 16.34  [25 s]
+en: KLD 0.0679 (median 0.0507, p99 0.324) same top 82.7% ln(PPL ratio) +0.0642 PPL 15.77 vs 14.79  [30 s]
+es: KLD 0.0690 (median 0.0552, p99 0.327) same top 81.6% ln(PPL ratio) +0.0566 PPL 23.30 vs 22.01  [35 s]
+fr: KLD 0.0716 (median 0.0443, p99 0.523) same top 83.5% ln(PPL ratio) +0.1048 PPL 11.14 vs 10.03  [41 s]
+hi: KLD 0.0698 (median 0.0493, p99 0.433) same top 87.6% ln(PPL ratio) +0.1004 PPL 10.25 vs 9.27  [47 s]
+ja: KLD 0.1076 (median 0.0826, p99 0.538) same top 79.8% ln(PPL ratio) +0.1214 PPL 45.43 vs 40.24  [56 s]
+zh: KLD 0.1004 (median 0.0822, p99 0.496) same top 80.8% ln(PPL ratio) +0.0788 PPL 43.64 vs 40.34  [63 s]

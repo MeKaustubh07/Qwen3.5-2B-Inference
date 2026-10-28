@@ -88,12 +88,12 @@ def score_options_steps(model, context_ids: list[int], options: list[list[int]],
     order = sorted(range(len(options)), key=lambda i: options[i])
     canonical, scores = [options[i] for i in order], []
     mask = boundary.to(model.b.device) if boundary is not None else None
-    # one option at a time (a context too big to copy within the budget, e.g. Tiny Aya at its cap: 288 MiB at 4K,
-    # 576 at 8K): score it on the context's own state, then rewind that, instead of copying it. An option only writes
+    # one option at a time (a context too big to copy within the budget): score it on the context's own state, then
+    # rewind that, instead of copying it. An option only writes
     # K/V at positions n_ctx.. and reads up to its own end, so the rows it leaves behind are never read by the next;
     # the recurrent state (Qwen3.5's DeltaNet) is updated in place, so it is put back from a copy taken once
     n_ctx = ctx.length
-    saved = (ctx.S.clone(), ctx.conv_tail.clone()) if group == 1 and ctx.S.numel() else None
+    saved = (ctx.S.clone(), ctx.conv_tail.clone()) if group == 1 else None
     for g in range(0, len(canonical), group):
         opts = canonical[g:g + group]
         if group > 1:
@@ -145,13 +145,13 @@ def prompt_ids(tokenizer, context: str, question: str, chat: bool, chat_style) -
     """The shared context: chat-formatted as the user turn, ending where the assistant's answer begins."""
     text = f"{context}\n\n{question}" if context else question
     if chat:
-        return tokenizer.encode(format_chat([{"role": "user", "content": text}], style=chat_style))  # writes BOS
-    return tokenizer.encode(text + "\nAnswer:", add_bos=True)
+        return tokenizer.encode(format_chat([{"role": "user", "content": text}], style=chat_style))
+    return tokenizer.encode(text + "\nAnswer:")
 
 
 def option_ids(tokenizer, option: str, chat: bool) -> list[int]:
     """An option's tokens where the answer begins: at the start of the assistant turn (chat), or after a space
-    following a plain "Answer:". A continuation, so never a BOS."""
+    following a plain "Answer:"."""
     if chat:
         return tokenizer.encode(option)
     return tokenizer.encode(option if option[:1].isspace() else " " + option)
@@ -179,9 +179,8 @@ def prepare(engine, kind: str, context: str, question: str, options: list[str] |
 def score_steps(engine, kind: str, options: list[str], ctx: list[int], opt_ids: list[list[int]],
                 length_normalize: bool = True, embeddings: bool = False, chunk: int = PREFILL_CHUNK):
     """Generator form of score: the model work for a prepared question (run it on the thread that owns the GPU)."""
-    vocab, budget = engine.tokenizer.vocab_size(), getattr(engine, "fork_budget", None)
-    scores = yield from score_options_steps(engine.model, ctx, opt_ids, vocab, embeddings,
-                                            FORK_BUDGET if budget is None else budget, chunk,
+    vocab = engine.tokenizer.vocab_size()
+    scores = yield from score_options_steps(engine.model, ctx, opt_ids, vocab, embeddings, FORK_BUDGET, chunk,
                                             boundary_mask(engine.tokenizer, vocab))
     key = torch.tensor([s.mean_logprob if length_normalize else s.logprob for s in scores], dtype=torch.float64)
     # normalize over the scores sorted by value: a sum's rounding depends on its order, so this keeps the

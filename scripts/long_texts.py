@@ -113,7 +113,7 @@ def main() -> None:
     ap.add_argument("--tokens-per-language", type=int, default=600)
     a = ap.parse_args()
     from tokenizers import Tokenizer
-    hf = Tokenizer.from_file(str(ROOT / "models/tiny-aya-global/tokenizer.json"))
+    hf = Tokenizer.from_file(str(ROOT / "models/qwen3.5-0.8b/tokenizer.json"))
     encode = lambda text: hf.encode(text, add_special_tokens=False).ids
     ps = parts(encode, a.tokens_per_language)
     for lang, part in zip(SOURCES, ps):

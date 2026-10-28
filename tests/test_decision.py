@@ -37,8 +37,8 @@ PERM = [2, 0, 3, 1]
 def alone(m, ctx, o, V, boundary=None):
     """log P(o | ctx) from one pass over ctx + o with a fresh state: the reference. With boundary (a boundary_mask),
     + log P(a boundary token follows o), from the last row. The head runs only on the rows from the context's last
-    token on (the ones that predict o, and the one after it), not on the context's: a 377-token Tiny Aya chat x 262k
-    ids would be 0.4 GB of logits. That is at least 2 rows, and those rows get exactly what a head over every row gave
+    token on (the ones that predict o, and the one after it), not on the context's: a long chat x 248k ids would be
+    a lot of logits. That is at least 2 rows, and those rows get exactly what a head over every row gave
     them: on the CPU any 2 or more rows do (a single row takes BLAS's vector path, which rounds differently), and on
     Metal Qwen's 25-token context makes them the last of the 8-row groups a 26-30-row head ran in."""
     h = m.packed_hidden([(torch.tensor(ctx + o), m.new_state(len(ctx) + len(o)))])[len(ctx) - 1:]
@@ -84,7 +84,7 @@ def core(eng, tol):
     ids = [tok.encode(o) for o in OPTIONS]
 
     # a fork continues exactly like the original would, and feeding the fork leaves the original untouched (room for
-    # the longest option: 5 tokens on Qwen, 10 on the tiny target's small vocabulary; attention reads views of the
+    # the longest option: 5 tokens on Qwen; attention reads views of the
     # cache, so its capacity never changes a value)
     room = len(ctx) + max(map(len, ids))
     st = m.new_state(room); m.forward(torch.tensor(ctx), state=st, last_only=True)
@@ -119,26 +119,7 @@ def core(eng, tol):
     return a
 
 
-# ---------------------------------------------------------------- tiny Cohere2, CPU: decide without forks
-# window 8; contexts below, at, one past and well past it; options of 6, 1 and 3 tokens, the longest first in the
-# canonical order, so a shorter option reads where a longer one wrote; fp32 and bf16 KV
-import tempfile
-
-from tiny_cohere2 import build
-
-with tempfile.TemporaryDirectory() as tmp:
-    _, make = build(tmp, window=8)
-    opts = [[3, 11, 12, 13, 14, 15], [7], [9, 9, 9]]
-    for kv in (torch.float32, torch.bfloat16):
-        tm, runs = make(kv_dtype=kv), []
-        for n in (5, 8, 9, 30, 40):
-            ctx = torch.randint(20, 500, (n,), generator=torch.Generator().manual_seed(n)).tolist()
-            runs.append(rewind_checks(tm, ctx, opts, 512))
-        check(f"tiny Cohere2 (window 8), {str(kv)[6:]} KV, contexts of 5-40 tokens: options scored on the context's own "
-              f"state with no fork == from their own forks (bit-exact), and the context left as its prefill left it "
-              f"({sum(a and b for a, b in runs)}/{len(runs)})", all(a and b for a, b in runs))
-
-# ---------------------------------------------------------------- the target: CPU fp32 (exact), or Tiny Aya on Metal
+# ---------------------------------------------------------------- the target: CPU fp32 (exact)
 eng = T.engine
 core(eng, TOL)
 from decision import decide
@@ -174,7 +155,7 @@ check(f"prepare rejects an unknown type, 3 boolean options, 1 choice, no score l
       bad == 5)
 
 # options are whole words: their tokens, then a token that cannot continue the last word or number. Every eos id ends
-# one; the dict shows the one a chat closes its turns with (Qwen's <|im_end|>, the tiny target's <|end|>)
+# one; the dict shows the one a chat closes its turns with (Qwen's <|im_end|>)
 tok, V = eng.tokenizer, eng.tokenizer.vocab_size()
 mask = boundary_mask(tok, V)
 chat = tok.encode(format_chat([{"role": "user", "content": "Hi"}], style=eng.chat_style))

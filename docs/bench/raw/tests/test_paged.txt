@@ -12,5 +12,8 @@ PASS  the other sequence can still decode after the failure
 PASS  a third state on a 2-slot pool raises OutOfBlocks; after a free the new state reuses slot 0, zeroed
 PASS  interleaved sequences match their solo runs (diff 0.0e+00, 0.0e+00), no shared blocks, slots 0 and 1
 PASS  paged bytes for 10 tokens = 20496384 (= 3 blocks x 4 tokens x 24576 B + 20201472 B DeltaNet state)
+PASS  block allocator: freeing twice, a never-allocated block, -1 or out of range raises; frees stay LIFO
+PASS  in-place scores, masking and softmax are bit-identical to the plain formula (4 shapes, CPU)
+PASS  every non_blocking host copy in src/ goes through state.to_device (none elsewhere)
 
-14/14 checks passed
+17/17 checks passed

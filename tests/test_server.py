@@ -65,19 +65,19 @@ def batched(model, V, prompts, n, join_at):
     return toks, logs, pool
 
 
-# ---------------------------------------------------------------- 1. batched == sequential (exact; aya: near-ties)
+# ---------------------------------------------------------------- 1. batched == sequential (exact)
 TARGET = target_from_argv()
-T = load_target(TARGET)                             # qwen (default): Qwen3.5-0.8B; tiny: a random Cohere2 (fp32 CPU)
+T = load_target(TARGET)                             # Qwen3.5-0.8B (fp32 CPU)
 name, eng, raw = T.name, T.engine, T.raw_ids        # the one model loaded, reused by the HTTP suites below
 V, N = eng.tokenizer.vocab_size(), 10
-ids = [raw(p) for p in PROMPTS[:3]]                 # as the server encodes a raw prompt (BOS first, if any)
+ids = [raw(p) for p in PROMPTS[:3]]                 # as the server encodes a raw prompt
 ref = [sequential(eng.model, V, x, N) for x in ids]
 got, logs, pool = batched(eng.model, V, ids, N, join_at=[0, 0, 3])    # third joins mid-flight
 check(f"{name}: batched greedy == sequential for 3 prompts (one joins at step 3)",
       all([T.agree(ref[j], got[j], what=f"prompt {j}") for j in range(3)]))
 diff = max((logs[j][i] - ref[j][1][i]).abs().max().item() for j in range(3) for i in range(N)
            if got[j][:i] == ref[j][0][:i])                       # steps after a divergence follow other contexts
-tol = f"{T.logit_tol:.0e}".replace("e-0", "e-")                     # qwen, tiny 2e-3; aya 3e-2
+tol = f"{T.logit_tol:.0e}".replace("e-0", "e-")
 check(f"{name}: batched logits == sequential logits (max|diff| {diff:.1e} < {tol})", diff < T.logit_tol)
 check(f"{name}: every KV block and DeltaNet state slot returned to the pool after sequences leave",
       pool.allocator.num_free == pool.allocator.num_blocks and len(pool.free_seqs) == 8)
@@ -108,7 +108,7 @@ check("the near-tie rule (D9) on made-up logits: equal, cancelled early, a near-
 
 # ---------------------------------------------------------------- 2. HTTP API over the scheduler (the target)
 V, tok, EOS = eng.tokenizer.vocab_size(), eng.tokenizer, set(eng.eos_ids)
-API_LEN = 256 if T.chat_len() + 64 <= 256 else 512            # api_suite's max_model_len (aya: a chat is 377 ids)
+API_LEN = 256 if T.chat_len() + 64 <= 256 else 512            # api_suite's max_model_len
 _refs = {}
 
 
@@ -133,7 +133,7 @@ def same(text, prompt, n, served, chat=False, what=""):
 
 
 def words(n):
-    """'word ' repeated to about n tokens (Qwen3.5: 'word ' * n, one token each; tiny: three each)."""
+    """'word ' repeated to about n tokens (Qwen3.5: 'word ' * n, one token each)."""
     return "word " * (n // (len(tok.encode("word word ")) - len(tok.encode("word "))))
 
 
@@ -316,9 +316,9 @@ async def backpressure_suite():
 
 async def preemption_suite():
     # 3 sequences x (prompt + 29 positions: the 30th token is never fed back) need 3 + 3 + 2 blocks of 16 = 8 > 6, so
-    # the pool runs dry mid-generation; units (4 a block): tiny 9 + 9 + 8 > 24; aya 32 > 20: 2 blocks fewer, dry early
+    # the pool runs dry mid-generation
     prompts = [PROMPTS[0], PROMPTS[1], PROMPTS[3]]
-    probe = eng.model.new_paged_pool(1, 16, max_seqs=1, max_chunk=T.prefill_chunk)   # one block of every layer
+    probe = eng.model.new_paged_pool(1, 16, max_seqs=1)          # one block of every layer
     need = sum(probe.blocks_for(len(raw(p)) + 29) for p in prompts)
     app = create_app(eng, max_batch=4, max_waiting=8, kv_blocks=(need - 2) // probe.allocator.num_blocks - 2 * (not T.exact),
                      max_model_len=96, prefill_chunk=T.prefill_chunk)
@@ -361,7 +361,7 @@ def uvicorn_suite():
     url = f"http://127.0.0.1:{port}"
     t0, stamps = time.perf_counter(), []
     body = {"prompt": PROMPTS[2], "max_tokens": 24 if T.exact else 64, "temperature": 0, "repetition_penalty": 1.0,
-            "stream": True}                                       # aya makes 24 tokens in ~1 s: 64 keep qwen's margin
+            "stream": True}
     with httpx.stream("POST", f"{url}/v1/completions", json=body, timeout=120) as r:
         for line in r.iter_lines():
             if line.startswith("data: {"):
@@ -428,15 +428,6 @@ freed = ("the GPU target's model is freed and the MPS cache emptied" if T.gpu el
          "the CPU target's model is freed before the Metal sections")
 del eng, T, raw                                # the Metal sections load Qwen on the GPU: free the target's model first
 check(freed, unload_target(TARGET))
-if TARGET != "qwen":                           # the Metal sections load Qwen3.5-0.8B on the GPU: beside its target only
-    for s in ("bf16", "int8", "int4"):
-        na(f"batched {s} matvec (M=2,3,8,13,32; with/without bias and residual) == per-row kernel == dense")
-    for b in ("metal", "metal-int4"):
-        na(f"qwen3.5-0.8b {b}: decode_batch (B up to 4, one joins late) greedy == single-sequence greedy")
-    na("scheduler over a HybridPool on Metal INT4: outputs == decoding alone, all KV blocks and state slots returned")
-    print(f"\n{sum(results)}/{len(results)} passed")
-    sys.exit(0 if all(results) else 1)
-
 # ---------------------------------------------------------------- 3. Metal: batched quantized kernels, batched decode
 from backend.metal import MetalBackend
 mb = MetalBackend("int4")

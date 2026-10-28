@@ -1,5 +1,0 @@
-{
- "keep_int8": [
-  "layers.0.mlp.down_proj.weight"
- ]
-}

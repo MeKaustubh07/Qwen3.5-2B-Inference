@@ -7,8 +7,8 @@ from dataclasses import dataclass
 import torch
 
 BLOCK = 32
-CHUNK = 1 << 24                 # weights quantized at a time (64 MB per fp32 temporary): the 262k-row tied embedding
-                                # of Tiny Aya would need ~6.5 GB of temporaries in one piece
+CHUNK = 1 << 24                 # weights quantized at a time (64 MB per fp32 temporary): a 248k-row embedding would
+                                # need several GB of temporaries in one piece
 
 
 @dataclass
@@ -77,7 +77,7 @@ def _quantize_rows(w: torch.Tensor, scheme: str, block: int) -> QuantTensor:
 
 _GROUPS = [  # checkpoint component / model fused-tensor suffix -> the fused group it belongs to
     (("self_attn.q_proj.weight", "self_attn.k_proj.weight", "self_attn.v_proj.weight",
-      "self_attn.qkvg.weight", "self_attn.qkv.weight"), "attn_in"),     # Qwen3.5's qkvg, Cohere2's qkv
+      "self_attn.qkvg.weight"), "attn_in"),                             # Qwen3.5's qkvg
     (("mlp.gate_proj.weight", "mlp.up_proj.weight", "mlp.gate_up.weight"), "mlp_in"),
     (("linear_attn.in_proj_qkv.weight", "linear_attn.in_proj_z.weight", "linear_attn.in_proj_b.weight",
       "linear_attn.in_proj_a.weight", "linear_attn.in_proj.weight"), "linear_in"),

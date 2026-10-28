@@ -1,7 +1,10 @@
 import sys
+from pathlib import Path
+
 import torch
 
 sys.path.insert(0, "src")
+import ops
 from config import Qwen35Config
 from models.qwen3_5 import Qwen35Model
 from state import BlockAllocator, OutOfBlocks
@@ -106,6 +109,41 @@ fixed = len(model.linear_layers) * (cfg.linear_num_value_heads * cfg.linear_key_
 check(f"paged bytes for {sa.length} tokens = {sa.bytes_used()} (= {len(sa.kv.block_table)} blocks x 4 tokens x {per_tok} B "
       f"+ {fixed} B DeltaNet state)", sa.bytes_used() == len(sa.kv.block_table) * 4 * per_tok + fixed)
 sa.free(); sb.free()
+
+# 5. the block allocator refuses what would let two sequences share a block: a double free, a block it never handed
+# out, an id out of range; and it still hands out the most recently freed block first
+alloc = BlockAllocator(4)
+a, b = alloc.allocate(), alloc.allocate()
+bad = []
+for blocks in ([a, a], [3], [-1], [9]):
+    try:
+        alloc.free(blocks); bad.append(blocks)
+    except ValueError:
+        pass
+alloc.free([b])
+check("block allocator: freeing twice, a never-allocated block, -1 or out of range raises; frees stay LIFO",
+      bad == [] and alloc.allocate() == b and alloc.num_free == 2)
+
+# 6. ops.attention computes its scores in place (one [heads, T, S] buffer instead of three): the same operations in
+# the same order as the plain formula, written out here, so the result is bit-identical on the CPU
+def plain(q, k, v):
+    T, Hq, d = q.shape
+    S, Hkv, _ = k.shape
+    kh, vh = (x.float().repeat_interleave(Hq // Hkv, dim=1).transpose(0, 1) for x in (k, v))
+    scores = (q.float().transpose(0, 1) @ kh.transpose(1, 2)) / d ** 0.5
+    scores = scores.masked_fill(torch.ones(T, S, dtype=torch.bool).triu(diagonal=S - T + 1), float("-inf"))
+    return (ops.softmax(scores, dim=-1) @ vh).transpose(0, 1)
+same = all(torch.equal(ops.attention(q, k, v), plain(q, k, v))
+           for q, k, v in ((torch.randn(T, 8, 16) * sc, torch.randn(S, 2, 16), torch.randn(S, 2, 16))
+                           for T, S, sc in ((7, 20, 1), (1, 300, 1), (64, 64, 30), (128, 512, 1))))
+check("in-place scores, masking and softmax are bit-identical to the plain formula (4 shapes, CPU)", same)
+
+# 7. a non_blocking copy reads the host tensor when the GPU reaches it, so a caller that reuses its tensor once
+# forward() returns would change what an already-issued step embeds: state.to_device copies from a private clone,
+# and every non_blocking copy in src/ goes through it
+hits = [f"{f}:{i}" for f in sorted(Path("src").rglob("*.py")) if f.name != "state.py"
+        for i, line in enumerate(f.read_text().splitlines(), 1) if "non_blocking" in line]
+check(f"every non_blocking host copy in src/ goes through state.to_device ({hits or 'none elsewhere'})", not hits)
 
 print(f"\n{sum(results)}/{len(results)} checks passed")
 sys.exit(0 if all(results) else 1)

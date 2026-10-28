@@ -113,33 +113,20 @@ async def idle(client, url, timeout=10.0) -> tuple[dict[str, float], float]:
         await asyncio.sleep(0.05)
 
 
-def pinned(m) -> str:
-    """The header's note on the pinned preamble (nothing from a server that does not report it)."""
-    if "prefix_pinned_units" not in m:
-        return ""
-    return f", prefix cache: {m['prefix_pinned_units']:.0f} KV units pinned" if m["prefix_pinned_units"] else \
-        ", no prefix cache"
-
-
 def footer(before, after, busy, served) -> list[str]:
-    """Prefix cache hits and bypasses among the measured requests; the idle pool's units all accounted for."""
-    if "prefix_hits_total" in after:
-        hits, byp = (after.get(k, 0) - before.get(k, 0) for k in ("prefix_hits_total", "prefix_bypasses_total"))
-        lines = [f"prefix cache: {hits:.0f} hits, {byp:.0f} bypasses over the {served} requests measured"]
-        pt, pf, pre = (after.get(k, 0) - before.get(k, 0)
-                       for k in ("prompt_tokens_total", "prefill_tokens_total", "requests_preempted_total"))
-        lines.append(f"prefill: {pf:.0f} tokens prefilled for {pt:.0f} prompt tokens ({pre:.0f} preemptions)")
-    else:
-        lines = ["prefix cache: N/A (the server reports no prefix_hits_total)"]
+    """Prefill work among the measured requests; the idle pool's blocks all accounted for."""
+    pt, pf, pre = (after.get(k, 0) - before.get(k, 0)
+                   for k in ("prompt_tokens_total", "prefill_tokens_total", "requests_preempted_total"))
+    lines = [f"prefill: {pf:.0f} tokens prefilled for {pt:.0f} prompt tokens ({pre:.0f} preemptions)"]
     if "kv_blocks_free" not in after or "kv_blocks_total" not in after:
         lines.append("KV pool: N/A (the server reports no kv_blocks_free / kv_blocks_total)")
     elif busy:
         lines.append(f"KV pool: N/A (the server still has {busy:.0f} requests in flight)")
     else:
-        free, pin, total = after["kv_blocks_free"], after.get("prefix_pinned_units", 0.0), after["kv_blocks_total"]
-        ok = free + pin == total
-        lines.append(f"KV pool, server idle: {free:.0f} free + {pin:.0f} pinned {'==' if ok else '!='} {total:.0f} "
-                     f"units: {'ok' if ok else 'MISMATCH'}")
+        free, total = after["kv_blocks_free"], after["kv_blocks_total"]
+        ok = free == total
+        lines.append(f"KV pool, server idle: {free:.0f} free {'==' if ok else '!='} {total:.0f} "
+                     f"blocks: {'ok' if ok else 'MISMATCH'}")
     return lines
 
 
@@ -169,7 +156,7 @@ async def main():
               f"e2e p50 {r['e2e50']:.2f}s  ({r['ok']} ok, {r['rejected']} rejected, {r['failed']} failed, "
               f"{r['timed']} with a first token)")
         table = [f"Model `{ready['model']}`, backend `{ready['backend']}`, bursts of {a.burst} chats sent at once, "
-                 f"{a.rounds} rounds, {sampling}, streaming chat completions{pinned(before)}.\n",
+                 f"{a.rounds} rounds, {sampling}, streaming chat completions.\n",
                  "| burst | rounds | TTFT p50 | TTFT p95 | e2e p50 | rejected | failed |",
                  "|---:|---:|---:|---:|---:|---:|---:|",
                  f"| {a.burst} | {a.rounds} | {r['ttft50'] * 1e3:.0f} ms | {r['ttft95'] * 1e3:.0f} ms | "
@@ -183,7 +170,7 @@ async def main():
                   f"{r['tpot50'] * 1e3:.1f} ms  e2e p50 {r['e2e50']:.2f}s  ({r['ok']} ok, {r['rejected']} rejected)")
         served = sum(r["ok"] for r in rows)
         table = [f"Model `{ready['model']}`, backend `{ready['backend']}`, {a.requests} requests per level, "
-                 f"{sampling}, streaming chat completions{pinned(before)}.\n",
+                 f"{sampling}, streaming chat completions.\n",
                  "| concurrency | throughput (tok/s) | TTFT p50 | TTFT p95 | TPOT p50 | e2e p50 | e2e p95 | rejected |",
                  "|---:|---:|---:|---:|---:|---:|---:|---:|"]
         for r in rows:

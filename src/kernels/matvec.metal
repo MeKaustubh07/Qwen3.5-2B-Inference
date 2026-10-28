@@ -75,13 +75,9 @@ kernel void matvec_bf16_rows(device float* y [[buffer(0)]], device const bfloat4
     ROWS_EPILOGUE
 }
 
-// GLU activations, in the operation order of torch's CPU kernels (silu, gelu(approximate="tanh")) so the fp32
-// results track the reference. Defined here because the native runtime compiles this file alone; elementwise.metal
-// declares them (all files compile as one source).
+// SiLU, in the operation order of torch's CPU kernel so the fp32 results track the reference. Defined here because
+// the native runtime compiles this file alone; elementwise.metal declares it (all files compile as one source).
 float silu(float g) { return g / (1.0f + precise::exp(-g)); }
-float gelu_tanh(float g) {
-    return 0.5f * g * (1.0f + precise::tanh(0.7978845608028654f * (g + 0.044715f * (g * g * g))));
-}
 
 // Fused GLU for decode: Wgu = [gate; up] stacked, shape [2F, K]. Output row i reads gate row i and up row F+i in
 // the same pass and writes act(gate) * up directly (one dispatch instead of three). K % 4 == 0.
@@ -105,17 +101,4 @@ kernel void matvec_swiglu_bf16(device float* out        [[buffer(0)]],
     if (row >= F) return;
     float2 gu = glu_dots(Wgu, x, K, F, row, lane);
     if (lane == 0) out[row] = silu(gu.x) * gu.y;
-}
-
-kernel void matvec_geglu_bf16(device float* out        [[buffer(0)]],
-                              device const bfloat* Wgu [[buffer(1)]],
-                              device const float* x    [[buffer(2)]],
-                              constant uint& K         [[buffer(3)]],
-                              constant uint& F         [[buffer(4)]],
-                              uint gid  [[thread_position_in_grid]],
-                              uint lane [[thread_index_in_simdgroup]]) {
-    uint row = gid / 32;
-    if (row >= F) return;
-    float2 gu = glu_dots(Wgu, x, K, F, row, lane);
-    if (lane == 0) out[row] = gelu_tanh(gu.x) * gu.y;
 }

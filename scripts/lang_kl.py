@@ -120,30 +120,6 @@ def run_all(ref_dir: str, out: str, logits_of, meta: dict) -> None:
 
 # --- references ---------------------------------------------------------------------------------------------------
 
-def ref_aya(out: Path) -> None:
-    os.environ.setdefault("HF_HUB_OFFLINE", "1")
-    import torch
-    from transformers import AutoTokenizer
-    from transformers.cache_utils import DynamicCache
-    from golden_aya import StreamedCohere2
-    d = str(ROOT / "models/tiny-aya-global")
-    torch.set_grad_enabled(False)
-    tok = AutoTokenizer.from_pretrained(d)
-    W = windows(lambda t: tok(t, add_special_tokens=False)["input_ids"], tok.bos_token_id)
-    json.dump(W, open(out / "windows.json", "w"))
-    ref, first = StreamedCohere2(d), N_CTX // 2
-    for g in range(0, len(LANGS), 2):                  # two languages (4 windows) per pass over the 36 layers
-        group = [w for w in W if w["lang"] in LANGS[g:g + 2]]
-        hs = ref.run_all([w["ids"] for w in group], [DynamicCache(config=ref.config) for _ in group])
-        for lang in LANGS[g:g + 2]:
-            mine = [i for i, w in enumerate(group) if w["lang"] == lang]
-            with open(out / f"{lang}.kld", "wb") as f:
-                write_header(f, ref.config.vocab_size, [group[i]["ids"] for i in mine])
-                for i in mine:
-                    encode_rows(ref.head(hs[i][first:N_CTX - 1]).numpy()).tofile(f)
-            print(f"wrote {lang}.kld", flush=True)
-
-
 def ref_qwen(out: Path) -> None:
     import torch
     from tokenizers import Tokenizer
@@ -248,31 +224,26 @@ def table(results: str) -> None:
 
 
 def tpc(n_chars: int) -> None:
-    """Tokens per 1,000 characters with both models' tokenizers (src/tokenizer.py, equal to HF), no BOS."""
+    """Tokens per 1,000 characters with Qwen3.5's tokenizer (src/tokenizer.py, equal to HF)."""
     sys.path.insert(0, str(ROOT / "src"))
     from tokenizer import Tokenizer
-    qwen, aya = (Tokenizer(str(ROOT / f"models/{m}/tokenizer.json")) for m in ("qwen3.5-2b", "tiny-aya-global"))
-    print("| language | characters | Qwen3.5 | Tiny Aya | Qwen3.5 / Tiny Aya |\n|---|---:|---:|---:|---:|")
+    qwen = Tokenizer(str(ROOT / "models/qwen3.5-2b/tokenizer.json"))
+    print("| language | characters | Qwen3.5 |\n|---|---:|---:|")
     for lang in LANGS:
         text = long_texts.section(lang)[:n_chars]
-        q, a = (len(t.encode(text)) * 1000 / len(text) for t in (qwen, aya))
-        print(f"| {lang} | {len(text):,} | {q:.1f} | {a:.1f} | {q / a:.2f}x |")
+        print(f"| {lang} | {len(text):,} | {len(qwen.encode(text)) * 1000 / len(text):.1f} |")
 
 
 def bpc(results: str) -> None:
-    """log2(reference perplexity) x tokens per character, both models, on the scored targets of each window (ids
-    257-511): reference perplexities from RESULTS_DIR's qwen_ours_int4.json / aya_ours_int4.json (ppl_base), the windows
-    rebuilt with each tokenizer as the references were."""
+    """log2(reference perplexity) x tokens per character on the scored targets of each window (ids 257-511): the
+    reference perplexity from RESULTS_DIR's qwen_ours_int4.json (ppl_base), the windows rebuilt with the tokenizer as
+    the reference was."""
     os.environ.setdefault("HF_HUB_OFFLINE", "1")
     from tokenizers import Tokenizer
-    from transformers import AutoTokenizer
-    aya = AutoTokenizer.from_pretrained(str(ROOT / "models/tiny-aya-global"))
     qwen = Tokenizer.from_file(str(ROOT / "models/qwen3.5-2b/tokenizer.json"))
-    sides = [("Qwen3.5-2B", "qwen_ours_int4.json", windows(lambda t: qwen.encode(t).ids, None), qwen.decode),
-             ("Tiny Aya", "aya_ours_int4.json", windows(lambda t: aya(t, add_special_tokens=False)["input_ids"],
-                                                         aya.bos_token_id), aya.decode)]
+    sides = [("Qwen3.5-2B", "qwen_ours_int4.json", windows(lambda t: qwen.encode(t).ids, None), qwen.decode)]
     print("| language | " + " | ".join(f"{n} perplexity | {n} tokens/char | {n} bits/char" for n, *_ in sides) +
-          " |\n|---|" + "---:|" * 6)
+          " |\n|---|" + "---:|" * 3)
     for lang in LANGS:
         cells = []
         for _, f, W, decode in sides:
@@ -293,7 +264,7 @@ def main() -> None:
         sys.exit(USAGE)
     if a[0] == "ref":
         out = Path(a[2]); out.mkdir(parents=True, exist_ok=True)
-        {"aya": ref_aya, "qwen": ref_qwen}[a[1]](out)
+        {"qwen": ref_qwen}[a[1]](out)
     elif a[0] == "ours":
         ours(*a[1:6], keep=opt("--keep"))
     elif a[0] == "mlx":

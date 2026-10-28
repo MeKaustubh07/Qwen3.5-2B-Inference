@@ -21,13 +21,11 @@ class Backend(Protocol):
     def rms_norm(self, x: torch.Tensor, w: torch.Tensor, eps: float) -> torch.Tensor:
         """[..., D] -> [..., D]"""
 
-    def rope(self, x: torch.Tensor, positions: torch.Tensor, theta: float, factor: float = 1.0) -> torch.Tensor:
-        """x [T, H, d] rotated by absolute positions [T]; frequencies divided by `factor` (linear scaling)."""
+    def rope(self, x: torch.Tensor, positions: torch.Tensor, theta: float) -> torch.Tensor:
+        """x [T, H, d] rotated by absolute positions [T]."""
 
-    def attention(self, q: torch.Tensor, k: torch.Tensor, v: torch.Tensor, causal: bool = True,
-                  window: int | None = None) -> torch.Tensor:
-        """q [T, Hq, d], k/v [S, Hkv, d] -> [T, Hq, d]; query i sits at position S - T + i. k/v may be any suffix of
-        the history ending at the last query; with a window W each query sees its last W keys (ops.attention)."""
+    def attention(self, q: torch.Tensor, k: torch.Tensor, v: torch.Tensor, causal: bool = True) -> torch.Tensor:
+        """q [T, Hq, d], k/v [S, Hkv, d] -> [T, Hq, d]; query i sits at position S - T + i (ops.attention)."""
 
     def silu_mul(self, gate_up: torch.Tensor) -> torch.Tensor:
         """gate_up [T, 2F], rows [gate | up] (a fused projection) -> silu(gate) * up, [T, F]"""
@@ -52,18 +50,5 @@ class Backend(Protocol):
                               dims) -> torch.Tensor:
         """The same for B sequences at once (row i belongs to states[i]) -> [B, H*dv]."""
 
-    def paged_attention(self, q, k_pool, v_pool, tables, lens, block_size, window=None) -> torch.Tensor:
-        """Batched decode attention reading a paged KV pool in place: q [B, Hq, d] -> [B, Hq, d]. The pool is fp32 or
-        bf16. With a window W, sequence i reads only positions lens[i] - W .. lens[i] - 1, so blocks below that may
-        be freed or reused."""
-
-    # ---- protocol v3, added for Cohere2 (Tiny Aya)
-    def layer_norm(self, x: torch.Tensor, w: torch.Tensor, eps: float) -> torch.Tensor:
-        """LayerNorm without bias over the last dim: (x - mean) / sqrt(var + eps) * w."""
-
-    # ---- protocol v4, added for Gemma 3 (Sarvam-Translate)
-    def gelu_tanh_mul(self, gate_up: torch.Tensor) -> torch.Tensor:
-        """gate_up [T, 2F], rows [gate | up] -> gelu_tanh(gate) * up (ops.gelu_tanh_mul), [T, F]"""
-
-    def geglu(self, x: torch.Tensor, w_gate_up: torch.Tensor) -> torch.Tensor:
-        """w_gate_up = [gate; up] stacked [2F, K]: returns gelu_tanh(x @ gate.T) * (x @ up.T), [T, F]."""
+    def paged_attention(self, q, k_pool, v_pool, tables, lens, block_size) -> torch.Tensor:
+        """Batched decode attention reading a paged fp32 KV pool in place: q [B, Hq, d] -> [B, Hq, d]."""

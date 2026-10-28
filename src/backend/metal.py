@@ -11,7 +11,6 @@ TG = 256                                                   # threads per threadg
 MAX_BATCH = 8                                              # rows one batched matvec dispatch handles (MAX_BATCH in MSL)
 KERNEL_ROWS = 4 * MAX_BATCH                                # up to here: batched kernels in groups; beyond: GEMM
 DEQUANT_CHUNK = 1 << 23                                    # weights expanded per prefill GEMM piece (32 MB fp32)
-KV_DTYPES = (torch.float32, torch.bfloat16)                # the KV cache types the decode-attention kernels read
 
 
 def load_library():
@@ -33,7 +32,7 @@ class MetalBackend(TorchBackend):
         self._no_bias = torch.zeros(1, dtype=torch.bfloat16, device=self.device)
         self._no_res = torch.zeros(1, device=self.device)
         self._seq0 = torch.zeros(1, dtype=torch.int32, device=self.device)   # a standalone state = sequence 0
-        self._inv_freq: dict[tuple[float, int, float], torch.Tensor] = {}   # RoPE frequencies per (theta, d, factor)
+        self._inv_freq: dict[tuple[float, int], torch.Tensor] = {}          # RoPE frequencies per (theta, d)
 
     def prepare(self, w, name=None):
         if isinstance(w, QuantTensor):
@@ -140,9 +139,6 @@ class MetalBackend(TorchBackend):
     def swiglu(self, x, w_gate_up):
         return self._fused_glu(x, w_gate_up, self.silu_mul, "matvec_swiglu_bf16")
 
-    def geglu(self, x, w_gate_up):
-        return self._fused_glu(x, w_gate_up, self.gelu_tanh_mul, "matvec_geglu_bf16")
-
     def _fused_glu(self, x, w_gate_up, act, kernel: str):
         """One bf16 decode row: `kernel` reads the gate and up rows in one pass and applies the activation. Anything
         else (quantized, batched kernels for small M, GEMM for prefill): linear, then the elementwise `act`."""
@@ -162,68 +158,48 @@ class MetalBackend(TorchBackend):
         kernel(out, x, w.to(self.device).contiguous(), float(eps), d, threads=rows * TG, group_size=TG)
         return out
 
-    def layer_norm(self, x, w, eps):
-        x = x.float().contiguous()
-        out = torch.empty_like(x)
-        d = x.shape[-1]
-        rows = x.numel() // d
-        self.lib.layer_norm(out, x, w.to(self.device, torch.float32).contiguous(), float(eps), d,
-                            threads=rows * TG, group_size=TG)
-        return out
-
-    def rope(self, x, positions, theta, factor=1.0):
+    def rope(self, x, positions, theta):
         x = x.float().contiguous()
         T, H, d = x.shape
         out = torch.empty_like(x)
         n = T * H * (d // 2)
-        key = (float(theta), d, float(factor))
+        key = (float(theta), d)
         if key not in self._inv_freq:                       # computed once, as ops.rope and transformers compute it
-            self._inv_freq[key] = ops.rope_inv_freq(theta, d, factor).to(self.device)
+            self._inv_freq[key] = ops.rope_inv_freq(theta, d).to(self.device)
         self.lib.rope(out, x, positions.to(device=self.device, dtype=torch.int32), self._inv_freq[key], H, d, n,
                       threads=n, group_size=min(TG, n))
         return out
 
-    def _kv_kernel(self, name: str, k, v):
-        """The decode-attention kernel built for the cache's dtype (attention.metal). compile_shader does not check
-        argument types: a bf16 tensor bound to a float* parameter is read as garbage without an error, so the dtype
-        picks the kernel here and anything else is refused."""
-        if k.dtype != v.dtype or k.dtype not in KV_DTYPES:
-            raise TypeError(f"{name}: keys and values must both be float32 or bfloat16, not {k.dtype} / {v.dtype}")
-        return getattr(self.lib, name if k.dtype == torch.float32 else name + "_bf16")
-
-    def attention(self, q, k, v, causal=True, window=None):
+    def attention(self, q, k, v, causal=True):
         if q.shape[0] != 1:
-            return super().attention(q, k, v, causal, window)   # prefill: many queries, masked
-        if window and k.shape[0] > window:                  # one query, the newest: it sees the last `window` keys
-            k, v = k[-window:], v[-window:]
+            return super().attention(q, k, v, causal)       # prefill: many queries, masked
         _, Hq, d = q.shape
         S, Hkv, _ = k.shape
-        if k.dtype != v.dtype or k.dtype not in KV_DTYPES:  # e.g. fp16: widened, as before
-            k, v = k.float(), v.float()
+        k, v = k.float(), v.float()                         # the kernel reads fp32 (a no-op for the fp32 cache)
         out = torch.empty(1, Hq, d, device=self.device)
         scores = torch.empty(Hq, S, device=self.device)
-        self._kv_kernel("attention_decode", k, v)(out, q.float().contiguous(), k.contiguous(), v.contiguous(),
-                                                  scores, S, Hkv, Hq // Hkv, d, threads=Hq * TG, group_size=TG)
+        self.lib.attention_decode(out, q.float().contiguous(), k.contiguous(), v.contiguous(),
+                                  scores, S, Hkv, Hq // Hkv, d, threads=Hq * TG, group_size=TG)
         return out
 
-    def paged_attention(self, q, k_pool, v_pool, tables, lens, block_size, window=None):
+    def paged_attention(self, q, k_pool, v_pool, tables, lens, block_size):
         """One dispatch for the whole batch: every (head, sequence) reads its keys/values in place via its block
-        table (no per-sequence gather). With a window, only the last `window` positions of each sequence."""
+        table (no per-sequence gather). compile_shader does not check argument types: a pool of another dtype bound
+        to a float* parameter is read as garbage without an error, so it is refused."""
+        if k_pool.dtype != torch.float32 or v_pool.dtype != torch.float32:
+            raise TypeError(f"paged_attention_decode: the pool must be float32, not {k_pool.dtype} / {v_pool.dtype}")
         B, Hq, d = q.shape
         Hkv = k_pool.shape[2]
         max_len = tables.shape[1] * block_size
         out = torch.empty(B, Hq, d, device=self.device)
         scores = torch.empty(B, Hq, max_len, device=self.device)
-        self._kv_kernel("paged_attention_decode", k_pool, v_pool)(
+        self.lib.paged_attention_decode(
             out, q.float().contiguous(), k_pool, v_pool, scores, tables, lens, tables.shape[1], max_len, block_size,
-            Hkv, Hq // Hkv, d, window or 0, threads=(Hq * TG, B), group_size=(TG, 1))
+            Hkv, Hq // Hkv, d, threads=(Hq * TG, B), group_size=(TG, 1))
         return out
 
     def silu_mul(self, gate_up):
         return self._act_mul("silu_mul", gate_up)
-
-    def gelu_tanh_mul(self, gate_up):
-        return self._act_mul("gelu_tanh_mul", gate_up)
 
     def _act_mul(self, kernel: str, gate_up):
         """The kernel reads both halves of each row in place: no copies of the [M, F] halves."""

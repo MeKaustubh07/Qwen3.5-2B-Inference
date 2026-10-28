@@ -6,9 +6,7 @@ import unicodedata
 sys.path.insert(0, "src")
 from tokenizer import Tokenizer
 
-MODELS = [("Qwen3.5-0.8B", "models/qwen3.5-0.8b", "tests/golden_tokens_qwen35.json"),
-          # gitignored: the gated files are needed to make it (scripts/golden_tokens.py models/tiny-aya-global ...)
-          ("Tiny Aya Global", "models/tiny-aya-global", "tests/golden_tokens_aya.json")]
+MODELS = [("Qwen3.5-0.8B", "models/qwen3.5-0.8b", "tests/golden_tokens_qwen35.json")]
 
 all_ok = True
 for name, model_dir, golden in MODELS:
@@ -23,17 +21,17 @@ for name, model_dir, golden in MODELS:
     cases = json.load(open(golden, encoding="utf-8"))
     passed = 0
     for c in cases:
-        plain, full = tok.encode(c["text"]), tok.encode(c["text"], add_bos=True)
-        text = unicodedata.normalize("NFC", c["text"]) if tok.nfc else c["text"]   # what decoding should give back
+        plain = tok.encode(c["text"])
+        text = unicodedata.normalize("NFC", c["text"])                # what decoding should give back
         decoded = tok.decode(plain)
-        if plain == c["ids_plain"] and full == c["ids"] and decoded == c["decoded"] == text:
+        if plain == c["ids_plain"] == c["ids"] and decoded == c["decoded"] == text:
             passed += 1
         else:
             print("FAIL", name, repr(c["text"]), "\n  ours:", plain, "\n  gold:", c["ids_plain"],
-                  "\n  with BOS ok:", full == c["ids"], " decoded ok:", decoded == c["decoded"], decoded == text)
+                  " decoded ok:", decoded == c["decoded"], decoded == text)
     all_ok &= passed == len(cases)
     print(f"{'PASS' if passed == len(cases) else 'FAIL'}  {name}: {passed}/{len(cases)} cases match the official "
-          f"tokenizer (vocab {tok.vocab_size()}, BOS {tok.bos_id})")
+          f"tokenizer (vocab {tok.vocab_size()})")
 
 # the 2B ships the same tokenizer files, so the 0.8B's answer keys cover it too
 same = all(open(f"models/qwen3.5-2b/{f}", "rb").read() == open(f"models/qwen3.5-0.8b/{f}", "rb").read()
@@ -44,8 +42,7 @@ all_ok &= same
 
 # ---------------------------------------------------------------- the merge (M6): a heap, as HF tokenizers does it
 # The old loop rescanned the whole word for its best pair after every merge: quadratic in the word's length, and an
-# unspaced CJK text is one long word (64K characters: 93-128 s). The heap merge must give HF's tokens everywhere,
-# today's tokens on every word Tiny Aya merges (its table has no merge ranked before one that makes a part of it),
+# unspaced CJK text is one long word (64K characters: 93-128 s). The heap merge must give HF's tokens everywhere
 # and be fast on long unspaced text.
 import random
 import time
@@ -121,7 +118,7 @@ for t in range(60 if FULL else 24):
 check(f"merge == HF tokenizers' BPE on {n_str} strings over {t + 1} synthetic tables ({n_bad_tables} not monotone, "
       f"where the old loop differs from HF on {old_differs}): {mismatch} differ", mismatch == 0 and old_differs > 0)
 
-# 2. the real tokenizers on whole texts: ids == HF's; and Tiny Aya's merges == the old loop's, piece by piece
+# 2. the real tokenizer on whole texts: ids == HF's
 for name, model_dir, golden in MODELS:
     if not os.path.exists(f"{model_dir}/tokenizer.json"):
         print(f"SKIP {name}: needs {model_dir}/tokenizer.json")
@@ -139,18 +136,6 @@ for name, model_dir, golden in MODELS:
     first = f"; first difference {bad[0][:30]!r}" if bad else ""
     check(f"{name}: ids == HF tokenizers' on {len(texts)} texts (goldens, 5,000 random, unspaced CJK to 4,000 "
           f"characters, the long texts; {nm} merges out of order){first}", not bad)
-    if name == "Tiny Aya Global":                    # the words encode merges: specials peeled off, NFC, pre-split,
-        words = set()                                  # mapped to byte characters
-        for t in texts:
-            for part in tok.special_re.split(t) if tok.special_re else [t]:
-                if part and part not in tok.special:
-                    part = unicodedata.normalize("NFC", part) if tok.nfc else part
-                    words |= {"".join(tok.byte_to_char[b] for b in w.encode("utf-8")) for w in tok._pieces(part)}
-        short = {w for w in words if len(w) <= 1500}                  # the old loop is quadratic
-        differ = sum(Tokenizer._bpe(tok, w) != old_bpe(tok.merge_rank, w) for w in short)
-        check(f"{name}: no merge ranks before one that makes a part of it ({nm}), and the merge == the old loop on "
-              f"all {len(short)} distinct words of up to 1,500 characters ({differ} differ; "
-              f"{len(words) - len(short)} longer ones checked against HF only)", nm == 0 and differ == 0)
 
 # 3. fast on long unspaced text (a two-stage gate: the 64K run only if the 8K one is quick)
 for name, model_dir, _ in MODELS:

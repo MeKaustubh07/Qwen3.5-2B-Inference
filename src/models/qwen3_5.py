@@ -51,17 +51,15 @@ class Qwen35Model:
         c = self.config
         if kv is None:
             kv = ContiguousKVCache(len(self.attn_layers), c.num_key_value_heads, c.head_dim, max_len,
-                                   device=self.b.device, dtype=torch.float32)
+                                   device=self.b.device)
         return HybridState(kv, len(self.linear_layers), c.linear_num_value_heads, c.linear_key_head_dim,
                            c.linear_value_head_dim, self.conv_dim, c.linear_conv_kernel_dim, device=self.b.device)
 
-    def new_paged_pool(self, num_blocks: int, block_size: int = 16, max_seqs: int = 8,
-                       max_chunk: int | None = None) -> HybridPool:
-        """Paged KV blocks for the attention layers + `max_seqs` DeltaNet state slots (~19 MB each on 0.8B/2B).
-        max_chunk is ignored: every attention layer is full, so a sequence keeps all of its blocks."""
+    def new_paged_pool(self, num_blocks: int, block_size: int = 16, max_seqs: int = 8) -> HybridPool:
+        """Paged KV blocks for the attention layers + `max_seqs` DeltaNet state slots (~19 MB each on 0.8B/2B)."""
         c = self.config
         kv = PagedKVPool(len(self.attn_layers), c.num_key_value_heads, c.head_dim, num_blocks, block_size,
-                         device=self.b.device, dtype=torch.float32)
+                         device=self.b.device)
         return HybridPool(kv, max_seqs, len(self.linear_layers), c.linear_num_value_heads, c.linear_key_head_dim,
                           c.linear_value_head_dim, self.conv_dim, c.linear_conv_kernel_dim, device=self.b.device)
 

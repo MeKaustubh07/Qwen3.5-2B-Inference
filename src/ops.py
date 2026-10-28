@@ -14,39 +14,26 @@ def rms_norm(x: torch.Tensor, weight: torch.Tensor, eps: float) -> torch.Tensor:
     return (x32 / rms) * weight.float()                 # broadcast weight across tokens
 
 
-def layer_norm(x: torch.Tensor, weight: torch.Tensor, eps: float) -> torch.Tensor:
-    """LayerNorm without bias (Cohere2 / Tiny Aya): subtract each token's mean, scale to unit variance, then
-    per-channel weight. Unlike RMSNorm, the mean is removed first. Same operation order as transformers, in fp32."""
-    x32 = x.float()
-    centered = x32 - x32.mean(dim=-1, keepdim=True)
-    variance = centered.pow(2).mean(dim=-1, keepdim=True)
-    return weight.float() * (centered * torch.rsqrt(variance + eps))
-
-
-def rope_inv_freq(theta: float, d: int, factor: float = 1.0) -> torch.Tensor:
+def rope_inv_freq(theta: float, d: int) -> torch.Tensor:
     """One rotation speed per pair, fast for the first pairs and very slow for the last: 1 / theta^(i / (d/2)), in
     fp32 on the CPU as transformers computes it once at load. Computed anywhere else (another device's pow), the last
-    bit can differ, and the angle position * freq multiplies that error by the position.
-
-    factor: linear scaling (rope_type "linear", Gemma 3's full-attention layers: 8): every frequency divided by it
-    after the default computation, as transformers does (modeling_rope_utils.py:189). 1.0 divides exactly."""
+    bit can differ, and the angle position * freq multiplies that error by the position."""
     half = d // 2
-    return 1.0 / (theta ** (torch.arange(0, half, dtype=torch.float32) / half)) / factor
+    return 1.0 / (theta ** (torch.arange(0, half, dtype=torch.float32) / half))
 
 
-def rope(x: torch.Tensor, positions: torch.Tensor, theta: float, factor: float = 1.0) -> torch.Tensor:
+def rope(x: torch.Tensor, positions: torch.Tensor, theta: float) -> torch.Tensor:
     """Rotary position embedding: rotate pairs of numbers by a position-dependent angle.
 
     x:         [T, H, d]  queries or keys, split into H heads of d numbers
     positions: [T]        position of each token in the sequence (0, 1, 2, ...)
     theta:     base frequency from the config (1e7 for Qwen3.5)
-    factor:    linear frequency scaling (rope_inv_freq)
 
     Pairing convention (HF "rotate_half"): number i pairs with number i + d/2.
     """
     d = x.shape[-1]
     half = d // 2
-    freqs = rope_inv_freq(theta, d, factor).to(x.device)                                       # [d/2]
+    freqs = rope_inv_freq(theta, d).to(x.device)                                               # [d/2]
     angles = positions.to(x.device).float()[:, None] * freqs[None, :]                          # [T, d/2]
     cos = torch.cos(angles)[:, None, :]                                           # [T, 1, d/2]
     sin = torch.sin(angles)[:, None, :]                                           # broadcast over heads
@@ -65,23 +52,15 @@ def softmax(x: torch.Tensor, dim: int = -1) -> torch.Tensor:
     return e / e.sum(dim=dim, keepdim=True)
 
 
-def attention(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor, causal: bool = True,
-              window: int | None = None) -> torch.Tensor:
+def attention(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor, causal: bool = True) -> torch.Tensor:
     """Grouped-query attention.
 
     q:    [T, Hq, d]   queries for the T new tokens (already rotated by RoPE)
-    k, v: [S, Hkv, d]  keys/values of the tokens seen so far, or of any suffix of them that ends at the last query
-                       (S == T until the KV cache exists); query i sits at position S - T + i of k/v
-    window:            a sliding window W (causal only): each query sees itself and the W - 1 keys before it, as in
-                       transformers (q - W < key <= q). None: every earlier key
+    k, v: [S, Hkv, d]  keys/values of the tokens seen so far (S == T until the KV cache exists); query i sits at
+                       position S - T + i of k/v
     returns [T, Hq, d]
     """
     T, Hq, d = q.shape
-    if window is not None:
-        if window < 1:
-            raise ValueError(f"window must be at least 1, not {window}")
-        if k.shape[0] > T + window - 1:                 # older than the first query's window: no query sees them
-            k, v = k[k.shape[0] - T - window + 1:], v[v.shape[0] - T - window + 1:]
     S, Hkv, _ = k.shape
     group = Hq // Hkv                                   # 8 // 2 = 4 query heads share each key/value head
     k = k.float().repeat_interleave(group, dim=1)       # [S, Hq, d]: KV head 0 serves query heads 0-3, head 1 serves 4-7
@@ -97,8 +76,6 @@ def attention(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor, causal: bool = 
     if causal:
         # query i sits at absolute position S - T + i and may only see keys at positions <= that
         future = torch.ones(T, S, dtype=torch.bool, device=q.device).triu(diagonal=S - T + 1)
-        if window is not None:                           # ... and only keys at positions > its own - window
-            future |= torch.ones(T, S, dtype=torch.bool, device=q.device).tril(diagonal=S - T - window)
         scores.masked_fill_(future, float("-inf"))      # exp(-inf) = 0 -> zero weight
 
     scores.sub_(scores.max(dim=-1, keepdim=True).values).exp_()   # softmax: subtract the max (exp overflows), exp,
@@ -111,15 +88,6 @@ def silu_mul(gate: torch.Tensor, up: torch.Tensor) -> torch.Tensor:
     """SwiGLU core: silu(gate) * up, where silu(g) = g * sigmoid(g) = g / (1 + e^-g)."""
     g = gate.float()
     return (g / (1.0 + torch.exp(-g))) * up.float()
-
-
-def gelu_tanh_mul(gate: torch.Tensor, up: torch.Tensor) -> torch.Tensor:
-    """GeGLU core (Gemma 3): gelu_tanh(gate) * up, with GELU's tanh approximation
-    0.5 g (1 + tanh(sqrt(2/pi) (g + 0.044715 g^3))): transformers' "gelu_pytorch_tanh", i.e. torch's
-    gelu(approximate="tanh"), operation for operation as the SIMD body of its CPU kernel computes it (the scalar loop at
-    the end of each thread's chunk fuses g + 0.044715 g^3 into one FMA, up to 1.2e-7 away)."""
-    g = gate.float()
-    return 0.5 * g * (1.0 + torch.tanh(math.sqrt(2 / math.pi) * (g + 0.044715 * (g * g * g)))) * up.float()
 
 
 # ---------------------------------------------------------------- Qwen3.5 (Gated DeltaNet) ops

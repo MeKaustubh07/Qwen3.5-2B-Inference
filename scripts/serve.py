@@ -20,16 +20,14 @@ def main() -> None:
     ap.add_argument("--max-batch", type=int, default=8)
     ap.add_argument("--max-waiting", type=int, default=64)
     ap.add_argument("--kv-blocks", type=int, default=None,
-                    help="16-token blocks of every layer (default: the model's, else 1024; 24 KiB/token on Qwen3.5-2B)")
+                    help="16-token blocks of every layer (default 1024; 24 KiB/token on Qwen3.5-2B)")
     ap.add_argument("--max-model-len", type=int, default=None,
-                    help="prompt + output tokens per request (default: the model's limit, else 4096; only lowers it)")
+                    help="prompt + output tokens per request (default 4096)")
     ap.add_argument("--drain-timeout", type=float, default=25.0)
     ap.add_argument("--prefill-chunk", type=int, default=512,
                     help="prompt tokens per packed prefill pass; longer prompts are split across engine steps")
     ap.add_argument("--batch-wait-ms", type=float, default=5.0,
                     help="an idle engine collects arrivals this close together into one prefill pass (0 = off)")
-    ap.add_argument("--prefix-cache", action="store_true",
-                    help="pin the chat template's fixed preamble in the KV pool: chats that start with it skip its prefill")
     ap.add_argument("--no-lock-weights", action="store_true",
                     help="do not mlock the weights (Metal): an idle server's first request then pays to page them in")
     a = ap.parse_args()
@@ -54,8 +52,7 @@ def main() -> None:
     logging.info(f"loading {a.model} on {a.backend} ({a.weights or 'safetensors'})")
     eng = load_engine(a.model, a.backend, a.weights)
     app = create_app(eng, a.max_batch, a.max_waiting, a.kv_blocks, a.max_model_len, prefill_chunk=a.prefill_chunk,
-                     batch_wait_ms=a.batch_wait_ms, lock_weights=not a.no_lock_weights,
-                     prefix_cache=a.prefix_cache)                                     # warms up before returning
+                     batch_wait_ms=a.batch_wait_ms, lock_weights=not a.no_lock_weights)   # warms up before returning
     uvicorn.run(app, host=a.host, port=a.port, log_level="info", timeout_graceful_shutdown=a.drain_timeout)
 
 

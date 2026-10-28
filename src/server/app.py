@@ -29,8 +29,8 @@ class Sampling(BaseModel):
     max_tokens: int | None = Field(None, ge=1, le=4096)
     max_completion_tokens: int | None = Field(None, ge=1, le=4096)   # the newer OpenAI name for max_tokens
     temperature: float | None = Field(None, ge=0.0, le=2.0)   # None (left out or null): the model's own, from the
-    top_p: float | None = Field(None, gt=0.0, le=1.0)          # registry (Tiny Aya's card 0.1 / 0.95 / 50, Qwen3.5's
-    top_k: int | None = Field(None, ge=0)                      # 0.7 / 0.8 / 20)
+    top_p: float | None = Field(None, gt=0.0, le=1.0)          # registry (Qwen3.5's 0.7 / 0.8 / 20)
+    top_k: int | None = Field(None, ge=0)
     repetition_penalty: float | None = Field(None, ge=1.0, le=2.0)
     seed: int | None = None
     stop: str | list[str] | None = None
@@ -131,27 +131,17 @@ class OutputFilter:
 
 def create_app(engine, max_batch: int = 8, max_waiting: int = 64, kv_blocks: int | None = None,
                max_model_len: int | None = None, drain_timeout: float = 2.0, prefill_chunk: int = 512,
-               batch_wait_ms: float = 5.0, lock_weights: bool = False, prefix_cache: bool = False) -> FastAPI:
-    kv_blocks = kv_blocks or getattr(engine, "kv_blocks", None) or 1024   # default: the model's pool (else 1024)
+               batch_wait_ms: float = 5.0, lock_weights: bool = False) -> FastAPI:
+    kv_blocks = kv_blocks or 1024
     if missing := sorted(set(SAMPLING_FIELDS) - set(engine.sampling)):  # no silent fallback to another model's values
         raise ValueError(f"{engine.name}: the registry's sampling lacks {missing}")
     model_sampling = SamplingParams(**engine.sampling)
-    cap = getattr(engine, "max_model_len", None)
-    if max_model_len is None:                           # default: the model's own limit (else 4096)
-        max_model_len = cap or 4096
-    elif cap and max_model_len > cap:                   # a model's own limit wins (registry and model)
-        log.info(f"max_model_len {max_model_len} -> {cap}, {engine.name}'s limit")
-        max_model_len = cap
+    max_model_len = max_model_len or 4096
     # /v1/decide prefills its context into a cache of its own, outside the pool: a backend may allow it less
-    decide_len = min(max_model_len, getattr(engine, "decide_max_len", None) or max_model_len)
     metrics = Metrics()
     sched = Scheduler(engine, metrics, max_batch=max_batch, max_waiting=max_waiting, kv_blocks=kv_blocks,
                       max_model_len=max_model_len, prefill_chunk=prefill_chunk, batch_wait_ms=batch_wait_ms,
-                      lock_weights=lock_weights, prefix_cache=prefix_cache)
-    if prefix_cache and sched.prefix:                   # the chat preamble pinned in the pool (server/prefix.py)
-        log.info(f"prefix cache: {len(sched.prefix.ids)} tokens pinned in {sched.pinned} KV units")
-    elif prefix_cache:
-        log.warning(f"prefix cache refused: {sched.prefix_note}")
+                      lock_weights=lock_weights)
     if lock_weights:
         if sched.lock_error:
             log.warning(f"could not lock the weights in memory ({sched.lock_error}); an idle server may be paged out")
@@ -175,8 +165,8 @@ def create_app(engine, max_batch: int = 8, max_waiting: int = 64, kv_blocks: int
         body = json.dumps({"detail": jsonable_encoder(exc.errors())}, ensure_ascii=True, default=str)
         return Response(body, status_code=422, media_type="application/json")
 
-    async def submit(prompt: str, body: Sampling, default_max: int, add_bos: bool):
-        ids = await asyncio.to_thread(engine.tokenizer.encode, prompt, add_bos)   # CPU work off the event loop
+    async def submit(prompt: str, body: Sampling, default_max: int):
+        ids = await asyncio.to_thread(engine.tokenizer.encode, prompt)   # CPU work off the event loop
         params = body.sampling(model_sampling)
         try:
             limit = body.limit(default_max, max_model_len - len(ids))
@@ -299,7 +289,7 @@ def create_app(engine, max_batch: int = 8, max_waiting: int = 64, kv_blocks: int
 
     @app.post("/v1/completions")
     async def completions(body: CompletionBody, http: HTTPRequest):
-        req, n = await submit(body.prompt, body, 128, add_bos=True)      # raw text: BOS first, if the model has one
+        req, n = await submit(body.prompt, body, 128)
         out = respond(req, n, False, body, http)
         return out if body.stream else await out
 
@@ -314,12 +304,9 @@ def create_app(engine, max_batch: int = 8, max_waiting: int = 64, kv_blocks: int
             raise HTTPException(400, f"messages exceed {MAX_PROMPT_CHARS} characters in total")
         if body.enable_thinking and not getattr(engine, "thinking", False):
             raise HTTPException(400, f"{engine.name} has no thinking mode")
-        try:                                              # a model's own template may refuse the conversation
-            prompt = format_chat([m.model_dump() for m in body.messages], style=engine.chat_style,
-                                 enable_thinking=body.enable_thinking)
-        except ValueError as e:                           # e.g. roles that do not alternate (Tiny Aya)
-            raise HTTPException(400, str(e))
-        req, n = await submit(prompt, body, 256, add_bos=False)          # the chat template writes BOS itself
+        prompt = format_chat([m.model_dump() for m in body.messages], style=engine.chat_style,
+                             enable_thinking=body.enable_thinking)
+        req, n = await submit(prompt, body, 256)
         out = respond(req, n, True, body, http, body.enable_thinking)
         return out if body.stream else await out
 
@@ -336,9 +323,8 @@ def create_app(engine, max_batch: int = 8, max_waiting: int = 64, kv_blocks: int
             raise HTTPException(400, str(e))
         if max(map(len, opt_ids)) > MAX_OPTION_TOKENS:
             raise HTTPException(400, f"an option exceeds {MAX_OPTION_TOKENS} tokens")
-        if len(ctx) + max(map(len, opt_ids)) > decide_len:
-            raise HTTPException(400, f"prompt ({len(ctx)} tokens) + longest option exceeds {decide_len}"
-                                     + (" (/v1/decide's limit on this backend)" if decide_len < max_model_len else ""))
+        if len(ctx) + max(map(len, opt_ids)) > max_model_len:
+            raise HTTPException(400, f"prompt ({len(ctx)} tokens) + longest option exceeds {max_model_len}")
         try:                                              # stepwise on the engine thread: decode keeps going
             fut = sched.run_job(lambda: decision.score_steps(engine, body.type, options, ctx, opt_ids,
                                                              body.length_normalize, body.embeddings,

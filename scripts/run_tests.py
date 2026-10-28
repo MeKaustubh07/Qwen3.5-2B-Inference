@@ -4,22 +4,9 @@ import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-TESTS = ["test_tokenizer", "test_aya", "test_cohere2", "test_window", "test_gemma3_tokenizer", "test_gemma3",
-         "test_sampling", "test_cache", "test_paged",
-         "test_kernels", "test_native", "test_quant", "test_qwen35", "test_qwen35_2b", "test_aya_model",
-         "test_aya_long", "test_aya_long_quant", "test_aya_quant", "test_gemma3_model", "test_gemma3_long",
-         "test_gemma3_long_quant", "test_gemma3_quant", "test_gemma3_serve_memory", "test_server", "test_prefill",
-         "test_decision",
-         "test_server --target tiny", "test_prefill --target tiny", "test_decision --target tiny",
-         "test_server --target aya-int4", "test_prefill --target aya-int4", "test_decision --target aya-int4",
-         "test_server --target aya-int8", "test_prefill --target aya-int8", "test_decision --target aya-int8",
-         "test_prefix --target tiny", "test_prefix", "test_prefix --target aya-int4", "test_prefix --target aya-int8"]
-SLOW = {"test_cache", "test_quant", "test_qwen35", "test_qwen35_2b", "test_aya_model", "test_aya_long",
-        "test_aya_long_quant", "test_aya_quant", "test_gemma3_model", "test_gemma3_long", "test_gemma3_long_quant",
-        "test_gemma3_quant", "test_gemma3_serve_memory", "test_server", "test_prefill", "test_decision",
-        "test_server --target aya-int4", "test_prefill --target aya-int4", "test_decision --target aya-int4",
-        "test_server --target aya-int8", "test_prefill --target aya-int8", "test_decision --target aya-int8",
-        "test_prefix", "test_prefix --target aya-int4", "test_prefix --target aya-int8"}
+TESTS = ["test_tokenizer", "test_sampling", "test_cache", "test_paged", "test_kernels", "test_native", "test_quant",
+         "test_qwen35", "test_qwen35_2b", "test_server", "test_prefill", "test_decision"]
+SLOW = {"test_cache", "test_quant", "test_qwen35", "test_qwen35_2b", "test_server", "test_prefill", "test_decision"}
 
 
 def main() -> None:
@@ -33,7 +20,7 @@ def main() -> None:
         if quick and entry in SLOW:
             continue
         script, *args = entry.split()
-        name = script + "".join(f"@{a}" for a in args if not a.startswith("--"))   # "test_server --target tiny"
+        name = script + "".join(f"@{a}" for a in args if not a.startswith("--"))   # "test_server --target qwen"
         t0 = time.perf_counter()
         r = subprocess.run([sys.executable, f"tests/{script}.py", *args], cwd=ROOT, capture_output=True, text=True)
         passes, fails, skips = r.stdout.count("PASS"), r.stdout.count("FAIL"), r.stdout.count("SKIP")

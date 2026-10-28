@@ -6,10 +6,7 @@ import torch
 
 from backend.metal import MetalBackend
 from backend.torch_ref import TorchBackend
-from chat import TemplateChat
-from config import Cohere2Config, Gemma3Config, Qwen35Config
-from models.cohere2 import Cohere2Model
-from models.gemma3 import Gemma3Model
+from config import Qwen35Config
 from models.qwen3_5 import Qwen35Model
 from quant import QtFile
 from tokenizer import Tokenizer
@@ -25,67 +22,8 @@ MODELS = {
     "qwen3.5-2b": dict(dir="models/qwen3.5-2b", family="qwen3_5", weights="model.safetensors-00001-of-00001.safetensors",
                        eos=[248046, 248044], chat="qwen3.5", thinking=True, policy="configs/quant/qwen3.5-2b.json",
                        sampling=dict(temperature=0.7, top_p=0.8, top_k=20, repetition_penalty=1.0)),
-    # Tiny Aya Global (Cohere2). chat "template": the model's own Jinja template, read from its tokenizer_config.json.
-    # Stops: <EOS_TOKEN>, <|END_OF_TURN_TOKEN|>, <|END_RESPONSE|>. Sampling: the model card's. max_model_len: its
-    # config's 8192 (prompt + output), checked past the 4096-token window (tests/test_aya_long*.py). No
-    # thinking mode. policy: written by scripts/calibrate_quant.py; until then INT4 warns. backends: only the
-    # quantized Metal ones fit in 8 GB (fp32 on the CPU would need 13.4 GB, bf16 on the GPU 6.7 GB). model_kwargs: what
-    # the model class is built with; kv_dtype: its KV is 6x Qwen3.5-2B's per token (36 layers x 4 heads x 128), so it
-    # is stored in bf16 (Qwen3.5 keeps fp32).
-    # kv_blocks: the server's pool, 768 blocks of every layer = 864 MiB of bf16 KV (two 8K sequences, rings counted);
-    # with the INT4 weights 8K prompts then hold 4.45 GiB of GPU memory. per_backend: what one backend changes. INT8's
-    # weights are 1.2 GB larger, and at 8K it held 5.48 GiB, over the 5.33 GiB Metal recommends on an 8 GB Mac, where
-    # another GPU user can make Metal abort work silently. So INT8 serves at most 4096 tokens from 512 blocks (two 4K
-    # sequences): 4.45 GiB generating, 4.82 scoring /v1/decide options, whose context lives outside the pool
-    # (with 768 blocks, 5.21). INT4 /v1/decide holds its context outside the pool, and the prefill of an 8K one peaks
-    # at 4.99 GiB, so INT4 decides take at most 6144 tokens (4.60 GiB); generation keeps 8192 (docs/results-log.md, M5
-    # part C and M6).
-    "tiny-aya-global": dict(dir="models/tiny-aya-global", family="cohere2", weights="model.safetensors.index.json",
-                            eos=[3, 6, 261001], chat="template", policy="configs/quant/tiny-aya-global.json",
-                            sampling=dict(temperature=0.1, top_p=0.95, top_k=50, repetition_penalty=1.0),
-                            max_model_len=8192, backends=("metal-int8", "metal-int4"),
-                            model_kwargs=dict(kv_dtype=torch.bfloat16),
-                            kv_blocks=768, per_backend={"metal-int8": dict(max_model_len=4096, kv_blocks=512),
-                                                         "metal-int4": dict(decide_max_len=6144)}),
-    # Sarvam-Translate (Gemma 3 4B text model; docs/sarvam-translate-plan.md). Stops: <eos>, <end_of_turn>
-    # (generation_config.json). Sampling: the card's temperature 0.01 with generation_config's top_k / top_p.
-    # max_model_len: the card's 8K (the config's 131072 is Gemma 3's). backends: quantized Metal only (the text model
-    # is 15.5 GB in fp32, 7.8 GB in bf16). model_kwargs: bf16 KV (136 KiB per token over 34 layers); the embedding
-    # scaled by sqrt(2560) rounded to bf16 (50.5), as transformers computes it with the checkpoint's bf16 weights.
-    # kv_blocks: the server's pool, 320 blocks of every layer = 680 MiB of bf16 KV (two 8K sequences: 317, the sliding
-    # layers' rings counted). fork_budget 0: /v1/decide scores its options on the context's own state, rewound, never
-    # on forks: a state holds all 34 layers' KV at its full length (136 KiB per token), and forking a short context
-    # (2 forks at 899 tokens) beside a generation's prefill took INT8 to 1.04x. Budgets: every workload of a long-running
-    # server in one process, the allocator's cache kept, each twice (scripts/bench.py --serve-mix; gated by
-    # tests/test_gemma3_serve_memory.py at 0.95x of the 5.33 GiB Metal recommends): generation at the cap in 512-token
-    # chunks, /v1/decide at its cap (16 options x 64 tokens, its context outside the pool), and decide interleaved with
-    # that generation's prefill as Scheduler._loop runs them, the highest. INT4 (the calibrated policy, 2.99 GB):
-    # 8K generation 0.83x; decide at 6144 interleaved 0.98x, at 4096 0.91x, so INT4 decides take at most 4096 tokens.
-    # INT8 (4.12 GB): an 8K prompt beside a 160-block pool reached 0.95x, so INT8 serves at most 4096 tokens from 241
-    # blocks (two 4K sequences): 0.90x; decide at 2048 interleaved 0.96x, at 1024 0.93x, so at most 1024.
-    "sarvam-translate": dict(dir="models/sarvam-translate", family="gemma3", weights="model.safetensors.index.json",
-                             eos=[1, 106], chat="template", policy="configs/quant/sarvam-translate.json",
-                             sampling=dict(temperature=0.01, top_p=0.95, top_k=64, repetition_penalty=1.0),
-                             max_model_len=8192, backends=("metal-int8", "metal-int4"),
-                             model_kwargs=dict(kv_dtype=torch.bfloat16, embed_scale_dtype=torch.bfloat16),
-                             kv_blocks=320, fork_budget=0,
-                             per_backend={"metal-int8": dict(max_model_len=4096, kv_blocks=241, decide_max_len=1024),
-                                          "metal-int4": dict(decide_max_len=4096)}),
-    # Gemma 3 4B-it, the base Sarvam-Translate was fine-tuned from: the same architecture, size and stops
-    # (generation_config.json), so Sarvam-Translate's budgets; sampling: generation_config's top_k / top_p at
-    # temperature 1. policy: written by scripts/calibrate_quant.py.
-    "gemma-3-4b-it": dict(dir="models/gemma-3-4b-it", family="gemma3", weights="model.safetensors.index.json",
-                          eos=[1, 106], chat="template", policy="configs/quant/gemma-3-4b-it.json",
-                          sampling=dict(temperature=1.0, top_p=0.95, top_k=64, repetition_penalty=1.0),
-                          max_model_len=8192, backends=("metal-int8", "metal-int4"),
-                          model_kwargs=dict(kv_dtype=torch.bfloat16, embed_scale_dtype=torch.bfloat16),
-                          kv_blocks=320, fork_budget=0,
-                          per_backend={"metal-int8": dict(max_model_len=4096, kv_blocks=241, decide_max_len=1024),
-                                       "metal-int4": dict(decide_max_len=4096)}),
 }
-FAMILIES = {"qwen3_5": (Qwen35Config, Qwen35Model),          # family -> (config class, model class)
-            "cohere2": (Cohere2Config, Cohere2Model),
-            "gemma3": (Gemma3Config, Gemma3Model)}
+FAMILIES = {"qwen3_5": (Qwen35Config, Qwen35Model)}          # family -> (config class, model class)
 
 
 @dataclass
@@ -94,17 +32,9 @@ class Engine:
     model: object
     tokenizer: Tokenizer
     eos_ids: set[int]
-    chat_style: str | TemplateChat
+    chat_style: str
     sampling: dict = field(default_factory=dict)
-    max_model_len: int | None = None           # a model's hard cap on prompt + generated tokens (None: no cap)
     thinking: bool = False                     # the model has a reasoning mode (Qwen3.5: <think> ... </think>)
-    kv_blocks: int | None = None               # the server's default KV pool, in blocks of every layer (None: 1024)
-    decide_max_len: int | None = None          # /v1/decide's limit on context + option, if below max_model_len
-    fork_budget: int | None = None             # /v1/decide's bytes of forked states at once (None: decision.py's)
-
-
-def chat_style(spec: dict, d: Path) -> str | TemplateChat:
-    return TemplateChat(str(d / "tokenizer_config.json")) if spec["chat"] == "template" else spec["chat"]
 
 
 def make_backend(kind: str, policy: str | None):
@@ -123,12 +53,10 @@ def make_backend(kind: str, policy: str | None):
 
 
 def load_engine(name: str, backend: str = "metal", weights_file: str | None = None) -> Engine:
-    spec = MODELS[name] | MODELS[name].get("per_backend", {}).get(backend, {})
+    spec = MODELS[name]
     d = ROOT / spec["dir"]
     if spec["family"] not in FAMILIES:
         raise NotImplementedError(f"{name}: no model class for family {spec['family']!r} yet")
-    if "backends" in spec and backend not in spec["backends"]:
-        raise ValueError(f"{name} runs on {' or '.join(spec['backends'])} on this machine, not {backend}")
     config_cls, model_cls = FAMILIES[spec["family"]]
     cfg, tok = config_cls.from_json(str(d / "config.json")), Tokenizer(str(d / "tokenizer.json"))
     # logits are cut to tokenizer.vocab_size() (the head may be padded past it): the ids must be contiguous, and every
@@ -139,8 +67,5 @@ def load_engine(name: str, backend: str = "metal", weights_file: str | None = No
                          f"stop ids {spec['eos']}")
     be = make_backend(backend, str(ROOT / p) if (p := spec.get("policy")) else None)
     weights = QtFile(weights_file) if weights_file else open_weights(str(d / spec["weights"]))
-    model = model_cls(cfg, weights, be, **spec.get("model_kwargs", {}))
-    caps = [c for c in (spec.get("max_model_len"), getattr(model, "max_positions", None)) if c]
-    return Engine(name, model, tok, set(spec["eos"]), chat_style(spec, d), spec["sampling"],
-                  min(caps) if caps else None, spec.get("thinking", False), spec.get("kv_blocks"),
-                  spec.get("decide_max_len"), spec.get("fork_budget"))
+    model = model_cls(cfg, weights, be)
+    return Engine(name, model, tok, set(spec["eos"]), spec["chat"], spec["sampling"], spec.get("thinking", False))

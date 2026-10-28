@@ -27,28 +27,18 @@ class TorchBackend:
     def rms_norm(self, x, w, eps):
         return ops.rms_norm(x, w, eps)
 
-    def layer_norm(self, x, w, eps):
-        return ops.layer_norm(x, w, eps)
+    def rope(self, x, positions, theta):
+        return ops.rope(x, positions, theta)
 
-    def rope(self, x, positions, theta, factor=1.0):
-        return ops.rope(x, positions, theta, factor)
-
-    def attention(self, q, k, v, causal=True, window=None):
-        return ops.attention(q, k, v, causal, window)
+    def attention(self, q, k, v, causal=True):
+        return ops.attention(q, k, v, causal)
 
     def silu_mul(self, gate_up):
         F = gate_up.shape[-1] // 2
         return ops.silu_mul(gate_up[..., :F], gate_up[..., F:])
 
-    def gelu_tanh_mul(self, gate_up):
-        F = gate_up.shape[-1] // 2
-        return ops.gelu_tanh_mul(gate_up[..., :F], gate_up[..., F:])
-
     def swiglu(self, x, w_gate_up):
         return self._glu(x, w_gate_up, self.silu_mul)
-
-    def geglu(self, x, w_gate_up):
-        return self._glu(x, w_gate_up, self.gelu_tanh_mul)
 
     def _glu(self, x, w_gate_up, act):
         """act(x @ gate.T) * (x @ up.T) for w_gate_up = [gate; up]: one linear over both, then the elementwise op."""
@@ -81,19 +71,15 @@ class TorchBackend:
         o, state.S[slot] = self.gated_delta(q, k, v, beta, g, state.S[slot])
         return self.rms_norm_gated(o.reshape(H, dv), z.reshape(H, dv), norm_w, eps).reshape(1, H * dv)
 
-    def paged_attention(self, q, k_pool, v_pool, tables, lens, block_size, window=None):
+    def paged_attention(self, q, k_pool, v_pool, tables, lens, block_size):
         """Batched decode attention over paged KV: q [B, Hq, d]; k_pool/v_pool one layer [blocks, bs, Hkv, d];
-        tables [B, max_nb], lens [B]. Reference: gather each sequence's positions, then ordinary attention. With a
-        window, only from position lens[i] - window on: table entries below its block are never read."""
+        tables [B, max_nb], lens [B]. Reference: gather each sequence's positions, then ordinary attention."""
         outs = []
         for i in range(q.shape[0]):
             n = int(lens[i]); nb = -(-n // block_size)
-            s0 = max(0, n - window) if window else 0
-            b0 = s0 // block_size
-            rows = slice(s0 - b0 * block_size, n - b0 * block_size)
-            K = k_pool[tables[i, b0:nb].long()].flatten(0, 1)[rows]
-            V = v_pool[tables[i, b0:nb].long()].flatten(0, 1)[rows]
-            outs.append(self.attention(q[i:i + 1], K, V, causal=True, window=window))
+            K = k_pool[tables[i, :nb].long()].flatten(0, 1)[:n]
+            V = v_pool[tables[i, :nb].long()].flatten(0, 1)[:n]
+            outs.append(self.attention(q[i:i + 1], K, V, causal=True))
         return torch.cat(outs)
 
     def deltanet_decode_batch(self, qkv, z, b, a, states, slot, conv_w, A_log, dt_bias, norm_w, eps, dims):

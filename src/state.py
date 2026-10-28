@@ -1,15 +1,12 @@
-import array
-import math
-
 import torch
 
 
-def kv_buffers(shape: tuple, device, dtype) -> tuple[torch.Tensor, torch.Tensor]:
+def kv_buffers(shape: tuple, device) -> tuple[torch.Tensor, torch.Tensor]:
     """Keys and values as the two halves of ONE zeroed buffer [2, *shape]. PyTorch's MPS allocator puts a request of
     10-512 MiB that fits no free space in a new 1 GiB heap (later requests share it), and gives one of 512 MiB or more
     a heap of its own size: K and V of 432 MiB each took 1,024 MiB, one 864 MiB buffer took 864. So a cache of 512 MiB
     or more costs what it holds (a smaller one shares a 1 GiB heap either way). Both halves are contiguous views."""
-    kv = torch.zeros(2, *shape, device=device, dtype=dtype)
+    kv = torch.zeros(2, *shape, device=device, dtype=torch.float32)
     return kv[0], kv[1]
 
 
@@ -17,7 +14,7 @@ def to_device(t: torch.Tensor, device) -> torch.Tensor:
     """A small host tensor (token ids, positions, block tables) on `device`, without waiting for the GPU. On MPS a
     non_blocking copy reads the host memory when the GPU reaches it, not when it is issued. PyTorch 2.14 keeps the
     source's storage alive until then (Copy.mm, buffer_with_offset_from_tensor), so a freed temporary is safe, but a
-    caller that writes to its tensor after the call changes what the GPU reads (tests/test_cohere2.py 11). So the copy
+    caller that writes to its tensor after the call changes what the GPU reads (tests/test_paged.py 7). So the copy
     is made from a private clone. A blocking copy is safe too, but waits for every queued kernel: ~0.3 ms at the start
     of a step, a layer's work in the middle of one."""
     if torch.device(device).type != "mps":
@@ -29,9 +26,9 @@ class ContiguousKVCache:
     """One preallocated buffer per layer: k/v [max_len, n_kv_heads, head_dim]."""
 
     def __init__(self, n_layers: int, n_kv_heads: int, head_dim: int, max_len: int,
-                 device: torch.device | str = "cpu", dtype: torch.dtype = torch.float32):
+                 device: torch.device | str = "cpu"):
         self.max_len = max_len
-        self.k, self.v = kv_buffers((n_layers, max_len, n_kv_heads, head_dim), device, dtype)
+        self.k, self.v = kv_buffers((n_layers, max_len, n_kv_heads, head_dim), device)
         self.length = 0                                   # tokens committed so far
 
     def write(self, layer: int, start: int, k: torch.Tensor, v: torch.Tensor) -> None:
@@ -42,9 +39,9 @@ class ContiguousKVCache:
         self.k[layer, start:end] = k.to(self.k.dtype)
         self.v[layer, start:end] = v.to(self.v.dtype)
 
-    def read(self, layer: int, end: int, lo: int = 0) -> tuple[torch.Tensor, torch.Tensor]:
-        """Keys/values for positions lo .. end-1 (views, no copy). lo > 0: a sliding-window layer's suffix."""
-        return self.k[layer, lo:end], self.v[layer, lo:end]
+    def read(self, layer: int, end: int) -> tuple[torch.Tensor, torch.Tensor]:
+        """Keys/values for positions 0 .. end-1 (views, no copy)."""
+        return self.k[layer, :end], self.v[layer, :end]
 
     def advance(self, n: int) -> None:
         self.length += n
@@ -60,7 +57,7 @@ class ContiguousKVCache:
     def fork(self) -> "ContiguousKVCache":
         """An independent copy holding the same positions 0 .. length-1 (same capacity)."""
         n_layers, max_len, h, d = self.k.shape
-        other = ContiguousKVCache(n_layers, h, d, max_len, device=self.k.device, dtype=self.k.dtype)
+        other = ContiguousKVCache(n_layers, h, d, max_len, device=self.k.device)
         other.k[:, : self.length] = self.k[:, : self.length]
         other.v[:, : self.length] = self.v[:, : self.length]
         other.length = self.length
@@ -103,9 +100,9 @@ class PagedKVPool:
     """One big pool of KV blocks shared by every sequence: k/v [layers, num_blocks, block_size, kv_heads, head_dim]."""
 
     def __init__(self, n_layers: int, n_kv_heads: int, head_dim: int, num_blocks: int, block_size: int = 16,
-                 device: torch.device | str = "cpu", dtype: torch.dtype = torch.float32):
+                 device: torch.device | str = "cpu"):
         self.block_size = block_size
-        self.k, self.v = kv_buffers((n_layers, num_blocks, block_size, n_kv_heads, head_dim), device, dtype)
+        self.k, self.v = kv_buffers((n_layers, num_blocks, block_size, n_kv_heads, head_dim), device)
         self.allocator = BlockAllocator(num_blocks)
         self.unit_bytes = 2 * self.k[:, 0].numel() * self.k.element_size()   # one block of every layer, K and V
 
@@ -165,14 +162,12 @@ class PagedSequence:
         self.pool.k[layer, blocks, offsets] = k.to(self.pool.k.dtype)
         self.pool.v[layer, blocks, offsets] = v.to(self.pool.v.dtype)
 
-    def read(self, layer: int, end: int, lo: int = 0) -> tuple[torch.Tensor, torch.Tensor]:
-        """Gather positions lo .. end-1 from their blocks into contiguous [end - lo, kv_heads, head_dim]. Only the
-        blocks holding them are touched (lo > 0: a sliding-window layer, whose older blocks may be gone)."""
-        bs = self.pool.block_size
-        b0, nb = lo // bs, -(-end // bs)                      # first block read, ceil(end / block_size)
-        table = torch.tensor(self.block_table[b0:nb], device=self.pool.k.device)
-        k = self.pool.k[layer, table].flatten(0, 1)[lo - b0 * bs:end - b0 * bs]   # [blocks*bs, H, d] -> the rows
-        v = self.pool.v[layer, table].flatten(0, 1)[lo - b0 * bs:end - b0 * bs]
+    def read(self, layer: int, end: int) -> tuple[torch.Tensor, torch.Tensor]:
+        """Gather positions 0 .. end-1 from their blocks into contiguous [end, kv_heads, head_dim]."""
+        nb = -(-end // self.pool.block_size)                  # ceil(end / block_size)
+        table = torch.tensor(self.block_table[:nb], device=self.pool.k.device)
+        k = self.pool.k[layer, table].flatten(0, 1)[:end]     # [blocks*bs, H, d] -> the rows
+        v = self.pool.v[layer, table].flatten(0, 1)[:end]
         return k, v
 
     def advance(self, n: int) -> None:
@@ -187,190 +182,6 @@ class PagedSequence:
     def bytes_used(self) -> int:
         p = self.pool
         return 2 * len(self.block_table) * p.k[0, 0].numel() * p.k.shape[0] * p.k.element_size()
-
-
-class GroupedKVPool:
-    """The paged KV pool for a model whose layers look back different distances (Tiny Aya: 9 full-attention layers
-    and 27 with a 4096-token sliding window), so the sliding layers' memory stops growing past the window.
-
-    The layers are split into groups of G = gcd(n_full, n_sliding) layers (Tiny Aya: 1 full group and 3 sliding
-    groups of 9); the pool's unit is one block_size-token block of one group's G layers, k/v [G, units, bs, Hkv, d],
-    and one allocator hands units to every group. num_blocks keeps its meaning (blocks of every layer):
-    units = num_blocks x groups. A sequence's full groups get a growing table of units; each sliding group a ring of
-    at most R units, logical block b in ring slot b % R, which is safe for every forward of at most max_chunk tokens:
-    R = ceil((W + max_chunk + bs - 2) / bs) holds every block that forward reads or writes. What a sequence holds only
-    grows (blocks_for), so reserving a prompt's units up front still means a prefill can never run out halfway.
-    poison=True (tests): a ring slot taking a new block is filled with NaN first, so a stale read shows."""
-
-    def __init__(self, layer_windows: list[int | None], n_kv_heads: int, head_dim: int, num_blocks: int,
-                 block_size: int = 16, max_chunk: int = 512, device: torch.device | str = "cpu",
-                 dtype: torch.dtype = torch.float32, poison: bool = False):
-        full = [i for i, w in enumerate(layer_windows) if w is None]
-        sliding = [i for i, w in enumerate(layer_windows) if w is not None]
-        if len({w for w in layer_windows if w is not None}) > 1:
-            raise ValueError("one sliding window size per model")
-        self.window = layer_windows[sliding[0]] if sliding else None
-        G = math.gcd(len(full), len(sliding))
-        self.groups = [full[i:i + G] for i in range(0, len(full), G)] + \
-            [sliding[i:i + G] for i in range(0, len(sliding), G)]
-        self.sliding = [False] * (len(full) // G) + [True] * (len(sliding) // G)
-        self.layer_map = {layer: (g, slot) for g, layers in enumerate(self.groups) for slot, layer in enumerate(layers)}
-        self.n_groups, self.block_size, self.poison = len(self.groups), block_size, poison
-        self.ring = -(-(self.window + max_chunk + block_size - 2) // block_size) if self.window else None
-        self.k, self.v = kv_buffers((G, num_blocks * self.n_groups, block_size, n_kv_heads, head_dim), device, dtype)
-        self.allocator = BlockAllocator(num_blocks * self.n_groups)
-        self.unit_bytes = 2 * self.k[:, 0].numel() * self.k.element_size()
-        self.max_step_units = self.n_groups            # one decode step adds at most one unit per group
-        self.pad_block = 0                             # table entries that are never read (before a window)
-
-    def blocks_for(self, n: int) -> int:
-        """Units a sequence of n positions holds: every block for a full group, at most R for a sliding one."""
-        nb = -(-n // self.block_size)
-        return sum(min(self.ring, nb) if sl else nb for sl in self.sliding)
-
-    def new_sequence(self) -> "WindowedSequence":
-        return WindowedSequence(self)
-
-    def batch_layout(self, seqs: list["WindowedSequence"], starts: list[int]):
-        """For a batched decode step (one new token per sequence at position starts[i], units reserved): per group,
-        the unit each new token goes to and each sequence's table by absolute block (a sliding group's entries before
-        the window point at pad_block and are never read); offsets and lengths are shared. Device tensors:
-        blocks [groups, B], offsets [B], tables [groups, B, max_nb], lens [B]."""
-        bs, W = self.block_size, self.window
-        ends = [p // bs + 1 for p in starts]
-        width = max(ends)
-        blocks = [[s.unit(g, p // bs, write=True) for s, p in zip(seqs, starts)] for g in range(self.n_groups)]
-        # filled by slices, not entry by entry: with Gemma 3's 34 one-layer groups a batch-8 step at 8K took 8.3 ms
-        # that way (now 1.2), all of it with the GPU idle
-        tables, pads = array.array("i"), array.array("i", [self.pad_block]) * width
-        for g, sl in enumerate(self.sliding):
-            for s, p, nb in zip(seqs, starts, ends):
-                first = max(0, p + 1 - W) // bs if sl else 0
-                tables += pads[:first]
-                tables.fromlist(s.units(g, first, nb))
-                tables += pads[:width - nb]
-        out = (torch.tensor(blocks), torch.tensor([p % bs for p in starts]),
-               torch.frombuffer(tables, dtype=torch.int32).view(self.n_groups, len(seqs), width),
-               torch.tensor([p + 1 for p in starts], dtype=torch.int32))
-        return tuple(to_device(t, self.k.device) for t in out)
-
-    def write_batch(self, slot: int, blocks: torch.Tensor, offsets: torch.Tensor, k: torch.Tensor, v: torch.Tensor):
-        """k, v: [B, kv_heads, head_dim], one new token per sequence, for the layer at `slot` of one group."""
-        self.k[slot, blocks, offsets] = k.to(self.k.dtype)
-        self.v[slot, blocks, offsets] = v.to(self.v.dtype)
-
-
-class WindowedSequence:
-    """One sequence's view of a GroupedKVPool: a table of units per full group, a ring of units per sliding group,
-    each ring slot tagged with the logical block it holds. Same interface as PagedSequence (write / read(lo) /
-    reserve / advance / free); block_table is the first group's table (a full group's: one unit per block)."""
-
-    def __init__(self, pool: GroupedKVPool):
-        self.pool = pool
-        self.tables: list[list[int]] = [[] for _ in range(pool.n_groups)]
-        self.tags: list[list[int]] = [[] for _ in range(pool.n_groups)]   # sliding: logical block in each slot
-        self.length = 0
-        self.shared = 0                    # blocks 0 .. shared-1 of every group are a pinned prefix's (borrow)
-
-    @property
-    def block_table(self) -> list[int]:
-        return self.tables[0]
-
-    def check_forward(self, start: int, end: int) -> None:
-        """Refuse, before anything moves, a forward whose blocks (the first query's window to the last token) would
-        not fit in the ring: only a chunk longer than the pool's max_chunk can."""
-        p = self.pool
-        if p.ring is not None and -(-end // p.block_size) - max(0, start - p.window + 1) // p.block_size > p.ring:
-            raise ValueError(f"a forward from position {start} to {end} spans more than the {p.ring}-block ring "
-                             "(chunks of at most the pool's max_chunk tokens)")
-
-    def reserve(self, end: int) -> None:
-        """Take every unit positions up to `end` need, all or nothing (as PagedSequence.reserve)."""
-        p = self.pool
-        need = p.blocks_for(end) - sum(map(len, self.tables))
-        if need <= 0:
-            return
-        if need > p.allocator.num_free:
-            raise OutOfBlocks(f"need {need} more KV units, only {p.allocator.num_free} free")
-        nb = -(-end // p.block_size)
-        for g, sl in enumerate(p.sliding):
-            for _ in range((min(p.ring, nb) if sl else nb) - len(self.tables[g])):
-                self.tables[g].append(p.allocator.allocate())
-                self.tags[g].append(-1)
-
-    def borrow(self, pin: "WindowedSequence", n: int) -> None:
-        """Start this empty sequence from the first n blocks of `pin` (same pool, rings not wrapped): their units are
-        shared read-only, never written (unit) or freed (free) through this sequence."""
-        p = self.pool
-        if self.length or any(self.tables) or pin.pool is not p or n * p.block_size > pin.length \
-                or any(sl and pin.tags[g][:n] != list(range(n)) for g, sl in enumerate(p.sliding)):
-            raise ValueError("borrow needs an empty sequence and a sequence of the same pool holding blocks 0..n-1")
-        self.tables, self.tags = [t[:n] for t in pin.tables], [t[:n] for t in pin.tags]
-        self.length, self.shared = n * p.block_size, n
-
-    def unit(self, g: int, b: int, write: bool = False) -> int:
-        """The unit holding logical block b of group g. A sliding group's ring slot is retagged when written; a read
-        of a block the ring no longer holds raises instead of returning another block's keys."""
-        p = self.pool
-        if write and (b % p.ring if p.sliding[g] else b) < self.shared:   # before any retag or poison
-            raise RuntimeError(f"a write to block {b} of group {g} would overwrite a shared prefix")
-        if not p.sliding[g]:
-            return self.tables[g][b]
-        i = b % p.ring
-        if write and self.tags[g][i] != b:
-            if p.poison:
-                p.k[:, self.tables[g][i]] = float("nan")
-                p.v[:, self.tables[g][i]] = float("nan")
-            self.tags[g][i] = b
-        elif self.tags[g][i] != b:
-            raise RuntimeError(f"block {b} of group {g} is no longer in the ring (slot {i} holds {self.tags[g][i]})")
-        return self.tables[g][i]
-
-    def units(self, g: int, b0: int, b1: int) -> list[int]:
-        """[unit(g, b) for b in range(b0, b1)], by list slices: a sliding group's blocks sit in consecutive ring slots
-        from b0 % R. Where a slice does not hold exactly those blocks, unit raises for the first it cannot read."""
-        table = self.tables[g]
-        if not self.pool.sliding[g]:
-            out = table[b0:b1]
-            ok = len(out) == b1 - b0
-        else:
-            i = b0 % self.pool.ring
-            j = i + b1 - b0
-            wrap = max(0, j - self.pool.ring)
-            out = table[i:j] + table[:wrap]
-            ok = self.tags[g][i:j] + self.tags[g][:wrap] == list(range(b0, b1))
-        return out if ok else [self.unit(g, b) for b in range(b0, b1)]
-
-    def write(self, layer: int, start: int, k: torch.Tensor, v: torch.Tensor) -> None:
-        end = start + k.shape[0]
-        self.reserve(end)
-        g, slot = self.pool.layer_map[layer]
-        bs, dev = self.pool.block_size, self.pool.k.device
-        units = torch.tensor([self.unit(g, q // bs, write=True) for q in range(start, end)], device=dev)
-        offsets = torch.arange(start, end, device=dev) % bs
-        self.pool.k[slot, units, offsets] = k.to(self.pool.k.dtype)
-        self.pool.v[slot, units, offsets] = v.to(self.pool.v.dtype)
-
-    def read(self, layer: int, end: int, lo: int = 0) -> tuple[torch.Tensor, torch.Tensor]:
-        """Positions lo .. end-1 of one layer, gathered into [end - lo, kv_heads, head_dim]."""
-        g, slot = self.pool.layer_map[layer]
-        bs = self.pool.block_size
-        b0, nb = lo // bs, -(-end // bs)
-        units = torch.tensor(self.units(g, b0, nb), device=self.pool.k.device)
-        rows = slice(lo - b0 * bs, end - b0 * bs)
-        return self.pool.k[slot, units].flatten(0, 1)[rows], self.pool.v[slot, units].flatten(0, 1)[rows]
-
-    def advance(self, n: int) -> None:
-        self.length += n
-
-    def free(self) -> None:
-        self.pool.allocator.free([u for t in self.tables for u in t[self.shared:]])   # a borrowed prefix stays
-        self.tables = [[] for _ in range(self.pool.n_groups)]
-        self.tags = [[] for _ in range(self.pool.n_groups)]
-        self.length = self.shared = 0
-
-    def bytes_used(self) -> int:
-        return (sum(map(len, self.tables)) - self.shared * len(self.tables)) * self.pool.unit_bytes
 
 
 class HybridState:
@@ -453,13 +264,8 @@ class HybridPool:
         return self.kv.block_size
 
     def blocks_for(self, n: int) -> int:
-        """Pool units a sequence of n positions holds (a GroupedKVPool's own count; else one block per bs tokens)."""
-        return self.kv.blocks_for(n) if hasattr(self.kv, "blocks_for") else -(-n // self.kv.block_size)
-
-    @property
-    def max_step_units(self) -> int:
-        """Units one decode step can add to one sequence (one per group)."""
-        return getattr(self.kv, "max_step_units", 1)
+        """KV blocks a sequence of n positions holds."""
+        return -(-n // self.kv.block_size)
 
     @property
     def unit_bytes(self) -> int:

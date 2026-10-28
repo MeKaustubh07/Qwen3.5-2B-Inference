@@ -21,12 +21,11 @@ PROMPTS = ["The capital of France is", "def fibonacci(n):", "Hello world",
            "The history of computing is a story of abstraction. Each generation of engineers built tools that hid"]
 TARGET = target_from_argv()
 T = load_target(TARGET)                                      # the target's one model in memory, reused below
-KV, POOL = (32, 32) if T.gpu else (256, 128)                 # KV blocks of the Schedulers and packed_vs_alone's pool:
-                                                             # small on the GPU (memory is gated; aya needs <= 18)
+KV, POOL = 256, 128                                         # KV blocks of the Schedulers and packed_vs_alone's pool
 
 
-def raw(eng, text):                                          # a raw prompt's ids as /v1/completions builds them (BOS
-    return eng.tokenizer.encode(text, add_bos=True)          # first, if the model has one), on any engine
+def raw(eng, text):                                          # a raw prompt's ids as /v1/completions builds them
+    return eng.tokenizer.encode(text)
 
 
 def sequential(model, V, ids, n, eos):                       # -> (greedy ids, logits rows: one per id, plus the row
@@ -108,7 +107,7 @@ def run_scheduler(eng, prompts, n, chunk, kv_blocks=256, max_batch=4, lock_weigh
     return [eng.tokenizer.decode(r.generated) for r in reqs], dict(s.metrics.counters), reqs, order, s
 
 
-# ---------------------------------------------------------------- the target (qwen, tiny: CPU fp32, exact; aya: near-ties)
+# ---------------------------------------------------------------- the target (qwen: CPU fp32, exact)
 eng = T.engine
 packed_vs_alone(eng, T.logit_tol, POOL)
 T.tidy()                                                     # on the GPU: free each section's pools (no-op on the CPU)

@@ -44,16 +44,13 @@ against Hugging Face `transformers`.
 | component | file | responsibility |
 |---|---|---|
 | loader | `src/weight_loader.py` | parse the safetensors header, mmap the file, hand out zero-copy bf16 tensor views; a sharded checkpoint through its `model.safetensors.index.json` |
-| config | `src/config.py` | `Qwen35Config`, `Cohere2Config`, `Gemma3Config` (from a checkpoint's `text_config` or a text model's own; refuses settings the engine does not implement) |
-| tokenizer | `src/tokenizer.py` | byte-level BPE from `tokenizer.json` (GPT-2 byte alphabet, merge ranks, special tokens first, NFC if the file asks, every regex Split, BOS from the post-processor); or SentencePiece-style BPE (Gemma 3): a Replace normalizer, merges from characters, byte fallback for characters with no token, added tokens split by a trie; both merge as HF tokenizers does, a heap of pairs by rank and position, n log n per word (a SentencePiece text is one word) |
-| chat template | `src/chat.py` | Qwen3.5 ChatML incl. thinking-mode rules; or the model's own Jinja template, rendered as transformers renders it (Tiny Aya, Sarvam-Translate) |
+| config | `src/config.py` | `Qwen35Config` (from a checkpoint's `text_config` or a text model's own; refuses settings the engine does not implement) |
+| tokenizer | `src/tokenizer.py` | byte-level BPE from `tokenizer.json` (GPT-2 byte alphabet, merge ranks, special tokens first, NFC, every regex Split; added tokens split by a trie); merges as HF tokenizers does, a heap of pairs by rank and position, n log n per word |
+| chat template | `src/chat.py` | Qwen3.5 ChatML incl. thinking-mode rules |
 | model | `src/models/qwen3_5.py` | hybrid layers, fused projections, partial RoPE, output gate, DeltaNet prefill and decode |
-| model | `src/models/decoder.py` | `AttentionDecoder`, the base of the all-attention models: fused qkv / gate-up, per-layer windows, prefill, packed and batched decode over contiguous, paged or grouped KV, streamed fp32 weights for the answer-key tests |
-| model | `src/models/cohere2.py` | Tiny Aya: all-attention layers, LayerNorm feeding attention and MLP in parallel, interleaved RoPE (by reordering q/k rows at load) on sliding layers only, a 4096-token sliding window on 27 of 36 layers (they read only their window's suffix of the KV cache), logit scale, bf16 KV |
-| model | `src/models/gemma3.py` | Sarvam-Translate and Gemma 3 4B-it, its base (Gemma 3 text model): sandwich norms (RMSNorm with 1 + w before and after attention and MLP), q/k norm, GeGLU, the embedding scaled by sqrt(hidden) in the weights' dtype, two RoPE tables (local theta 10,000; global 1,000,000 with linear factor 8), a 1024-token window on 29 of 34 layers; reads the text tower under `language_model.model.` and never the vision tensors |
-| state | `src/state.py` | contiguous and paged KV caches, block allocator (refuses double frees), `HybridState`; `GroupedKVPool` for Tiny Aya: layer groups as pool units, a per-sequence ring of blocks for the sliding layers (an 8K sequence holds 388 MiB of bf16 KV instead of 576); Sarvam-Translate's gcd(5, 29) = 1 gives 34 one-layer groups (their layout costs 0.5-0.6% of a batch-8 step) |
-| backend protocol | `src/backend/base.py` | the ops a model may call; v2 added Qwen3.5's DeltaNet ops, v3 `layer_norm` (Tiny Aya), v4 `gelu_tanh_mul`, fused `geglu` and a linear-scaling `factor` on `rope` (Gemma 3); the torch reference and Metal implement each |
-| kernels | `src/kernels/*.metal` | matvec (bf16, INT8, INT4, batched), RMSNorm, LayerNorm (Tiny Aya), RoPE, decode attention, DeltaNet step, SwiGLU, GeGLU (Gemma 3) |
+| state | `src/state.py` | contiguous and paged KV caches, block allocator (refuses double frees), `HybridState` |
+| backend protocol | `src/backend/base.py` | the ops a model may call; v2 added Qwen3.5's DeltaNet ops; the torch reference and Metal implement each |
+| kernels | `src/kernels/*.metal` | matvec (bf16, INT8, INT4, batched), RMSNorm, RoPE, decode attention, DeltaNet step, SwiGLU |
 | quantization | `src/quant.py` | block-32 INT8 / asymmetric INT4, calibrated mixed-precision policy, `.qt` format |
 | scheduler | `src/server/scheduler.py` | continuous batching, admission control, preemption, cancellation, drain |
 | API | `src/server/app.py` | `/v1/completions`, `/v1/chat/completions` (SSE), `/health`, `/ready`, `/metrics` |
@@ -70,11 +67,7 @@ against Hugging Face `transformers`.
    sequence in flight`; its prompt's blocks are reserved on admission, so a prefill never runs out halfway. The
    headroom stops a newcomer from being preempted on its very first step. When an idle engine is woken by an
    arrival, it keeps collecting arrivals that come within 5 ms of each other (`--batch-wait-ms`, default 5; twice
-   that in total at most), so requests that arrive together share one prefill pass. With `--prefix-cache` (Tiny
-   Aya), the chat template's fixed preamble is prefilled once at start-up into a sequence that is never freed; a
-   chat whose ids start with it borrows those KV units read-only and prefills only the rest (`server/prefix.py`:
-   whole blocks only, never written or freed through the borrower, and only while its prompt + max_tokens cannot
-   wrap a ring onto them).
+   that in total at most), so requests that arrive together share one prefill pass.
 4. **Prefill (packed and chunked).** Each loop iteration runs **one packed forward** over at most `prefill_chunk`
    prompt tokens (default 512), taken first come, first served from the prefilling requests. Per-token work
    (norms, projections, MLP) runs once over all their tokens, so several short prompts share one pass over the
@@ -92,10 +85,7 @@ against Hugging Face `transformers`.
    the M2, `torch.topk` over the 248k vocabulary is 4× faster on the CPU than on MPS, so the GPU was the wrong
    place for it.) A request that cannot be sampled fails alone.
 7. **Stream.** Tokens are decoded incrementally. Text ending in an incomplete UTF-8 character (U+FFFD) is held
-   back until the next token completes it. A SentencePiece tokenizer with byte fallback (Gemma 3) needs more: HF
-   decodes a run of byte tokens all or nothing, so a character already decoded turns into U+FFFD if the run goes on
-   with bytes that make it invalid; there text is held back while the last token is a byte token
-   (`Tokenizer.is_final`; Meitei Mayek is about two thirds byte tokens). Each piece goes to the handler's asyncio
+   back until the next token completes it (`Tokenizer.is_final`). Each piece goes to the handler's asyncio
    queue and out as an SSE chunk.
 8. **Finish** on EOS, `max_tokens`, cancellation (client disconnect), or error. KV blocks go back to the pool
    immediately, so a waiting request can take the slot on the next step.
@@ -143,14 +133,7 @@ some order), so options are scored independently.
 
 The hybrid architecture is what makes this fit. If all 24 layers were full attention, a token would cost 96 KiB
 and a 4k-token context 384 MiB **per sequence**. With 18 of 24 layers as DeltaNet the same context costs 96 MiB + 20
-MiB of fixed state. Qwen3.5's KV cache is kept in fp32 to match the reference exactly. Tiny Aya's (36 attention
-layers, 144 KiB per token in fp32) is stored in bf16 (`kv_dtype` in the registry): the decode-attention kernels read
-bf16 or fp32 K/V and widen each element as they read it, and the cost is measured as a KL change (none measurable
-at the answer key's positions; tests/test_aya_quant.py). Sarvam-Translate's (34 attention layers x 4 KV heads x 256,
-136 KiB per token in bf16) would be 1,088 MiB for an 8K sequence in one table; its 29 sliding layers hold rings of
-at most 97 blocks, so two 8K sequences take 317 of its server pool's 320 blocks (680 MiB).
-Its `/v1/decide` never forks (`fork_budget=0`): a fork copies all 34 layers at the context's full length, and two
-forks beside a generation's prefill took INT8 to 1.04x of Metal's recommended working set.
+MiB of fixed state. Qwen3.5's KV cache is kept in fp32 to match the reference exactly.
 
 ## 5. Performance model
 
@@ -191,14 +174,12 @@ The levers that follow from this model:
   Qwen3.5 batch-1 decode from 20 to 28-30 ms). `state.to_device` copies from a private clone, without waiting.
 - **GPU memory headroom, and failures PyTorch does not report.** PyTorch's MPS allocator puts every tensor of
   10-512 MiB in a 1 GiB heap until the process is "under memory pressure", which by default starts at 1.4x Metal's
-  recommended working set: never, on an 8 GB Mac. Tiny Aya INT8 with an fp32 KV cache at 4.8K tokens reached 5.21 of
-  the 5.33 GiB Metal recommends. While another process used the GPU too, Metal aborted command buffers for lack of
+  recommended working set: never, on an 8 GB Mac. A long Metal run can approach the 5.33 GiB Metal recommends; while
+  another process used the GPU too, Metal aborted command buffers for lack of
   memory, and PyTorch 2.14, which never reads a command buffer's status, returned garbage without an error (the same
   run had passed an hour earlier). The backend package sets a low watermark of 0.75x before torch allocates anything,
-  so above 4.0 GiB heaps are sized to their requests: 4.70 GiB, decode exact. Cost, INT8 at 4K over 6 alternating
-  runs: prefill 22.8 vs 21.9 s, decode 72.5 vs 74.8 ms/token (per pair -3.8 to +5.0 ms), so at most a few percent.
-  PyTorch still cannot report an abort, so the long Metal test reads them from macOS's unified log, where Metal
-  records each one.
+  so above 4.0 GiB heaps are sized to their requests. PyTorch still cannot report an abort; Metal records each one
+  in macOS's unified log.
 
 Prefill is compute-bound (`[T, K] × [K, N]` GEMMs), so it uses PyTorch's tuned MPS GEMM. The hand-written tiled
 GEMM is 4× slower and is kept only for study. Quantized weights are expanded to fp32 by one kernel pass per 32 MB
@@ -320,8 +301,7 @@ The engine is **stateful**: a sequence's KV blocks and DeltaNet state live in on
   ~0.1–0.2 s of MPS shape compilation. Locking the pools and warming common prompt lengths at start-up fix both.
 - **Decisions prefill their context outside the pool**: short contexts fork per option group (grouped under 256 MB);
   long ones score each option on the context's own state and rewind it, so the peak is the context's prefill, not
-  copies (Tiny Aya INT4 at 8K: 4.99 GiB, hence its 6,144-token decide cap). Sharing the pinned chat preamble with
-  decide's context would save its ~1.1 s prefill per chat-style decision.
+  copies.
 - Batch 2 barely beats batch 1: the linears cost 33 vs 17 ms, and the 2-rows kernel is 1.2–2.1× slower than the
   single-row kernel at one row (which is why M = 1 keeps its own kernel).
   Simdgroup-matrix (8×8 hardware tile) kernels, as in MLX and llama.cpp's `mul_mm`, are the next step for both
@@ -329,8 +309,7 @@ The engine is **stateful**: a sequence's KV blocks and DeltaNet state live in on
 - Single-stream decode trails MLX-LM (50 vs 70 tok/s): mostly bytes (our tied head is INT8, 0.5 GB of the 1.41 GB,
   by a rule carried over from Qwen2.5 and not re-measured on Qwen3.5; MLX's is 4-bit), plus ~300 dispatches per
   step issued from Python.
-- Qwen3.5's KV cache is fp32 (Tiny Aya's is bf16); an INT8 KV cache would double the bf16 capacity again.
-- Prefix caching covers only the chat template's fixed preamble (opt-in, Tiny Aya); caching any shared prefix
-  (multi-turn history, Qwen's DeltaNet snapshots) is item 2 above.
+- Qwen3.5's KV cache is fp32; a bf16 or INT8 KV cache would cut it 2x / 4x.
+- No prefix caching yet (multi-turn history, Qwen's DeltaNet snapshots): item 2 above.
 - Speculative decoding (Qwen3.5-0.8B drafting for 2B) would cut per-token latency at batch 1.
 - Text only: the checkpoint's vision tower is ignored.

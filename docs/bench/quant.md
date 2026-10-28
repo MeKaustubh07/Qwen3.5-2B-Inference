@@ -70,3 +70,53 @@ The policy was `configs/quant/qwen2.5-0.5b.json` (names are fused tensors: `qkv`
 - **The quantized kernels sit further below their (higher) ceilings** (40–49% vs 60–64%): unpacking nibbles and applying scales adds ALU work per byte, and the fixed per-token overhead is a larger share of a shorter step.
 - **INT4 prefill is slower** (TTFT 333 ms at 16 tokens vs 35 ms for bf16) because prefill dequantizes each weight matrix on the fly before PyTorch's GEMM. A quantized GEMM kernel would remove this; it is the main open item.
 - `.qt` files (`scripts/quantize.py`, streamed one tensor at a time): 0.41 GB INT4 / 0.52 GB INT8 vs 0.99 GB safetensors. Loading the INT4 file takes 1.4 s vs 3.4 s for quantizing at startup, and produces bit-identical logits.
+
+## Qwen3.5-2B INT4 per language, on long text (2026-10-10)
+
+How far INT8 and INT4 move Qwen3.5-2B's next-token distribution, language by language, on long text. Raw output:
+[`raw/qwen_lang_kl/`](raw/qwen_lang_kl/); script: `scripts/lang_kl.py`.
+
+- **Text:** two 512-token windows per language (en fr de es hi ar zh ja), cut at 25% and 60% of one public-domain work
+  each (`scripts/long_texts.py`: Austen, Hugo, Kafka, Cervantes, Bharatendu Harishchandra, the Nights, Journey to the
+  West, Akutagawa), past their famous openings. One work per language, not parallel text.
+- **Scored:** positions 256-510 of each window (510 per language, each with 256+ tokens of context).
+- **Reference:** Qwen3.5-2B HF in bf16 (fp32 does not fit in 8 GB).
+- **Metric:** KL(reference || build) in nats per token, with llama.cpp's formula (tokens whose reference log
+  probability is above -16).
+
+| build | en | fr | de | es | hi | ar | zh | ja | mean |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| INT8 | 0.0009 | 0.0007 | 0.0008 | 0.0009 | 0.0007 | 0.0010 | 0.0010 | 0.0010 | 0.0009 |
+| INT4, nothing kept INT8 but the embedding | 0.0679 | 0.0716 | 0.0708 | 0.0690 | 0.0698 | 0.1198 | 0.1004 | 0.1076 | 0.0846 |
+| INT4 as shipped (1.41 GB) | 0.0547 | 0.0565 | 0.0628 | 0.0577 | 0.0509 | 0.0906 | 0.0786 | 0.0832 | 0.0669 |
+
+- The 0.045 in the Qwen3.5-2B accuracy table is on short prompts; on this long text the shipped INT4 is at 0.067.
+- Calibration puts 83% of the position-0 damage in 3 tensors (layer 14 `down_proj`, layer 15 `o_proj`, layer 6
+  DeltaNet `out_proj`); keeping the policy's 5 tensors INT8 cuts the long-text KL by 21%.
+- INT8's floor (0.0009) is the bf16 reference's own rounding.
+
+Tokens per 1,000 characters (`lang_kl.py tpc`: the first 20,000 characters of each work, or all of it where shorter)
+and bits per character, log2(reference perplexity) x tokens per character on the scored positions (`lang_kl.py bpc`),
+which compares across tokenizers where per-token perplexity does not:
+
+| language | characters | tokens / 1,000 chars | reference perplexity | tokens/char (scored) | bits/char |
+|---|---:|---:|---:|---:|---:|
+| en | 20,000 | 254.8 | 14.79 | 0.238 | 0.927 |
+| fr | 20,000 | 287.4 | 10.03 | 0.301 | 1.000 |
+| de | 20,000 | 264.7 | 16.34 | 0.265 | 1.068 |
+| es | 20,000 | 281.2 | 22.01 | 0.290 | 1.294 |
+| hi | 16,300 | 511.7 | 9.27 | 0.551 | 1.771 |
+| ar | 20,000 | 337.4 | 30.46 | 0.358 | 1.764 |
+| zh | 20,000 | 875.0 | 40.34 | 0.882 | 4.707 |
+| ja | 6,128 | 676.6 | 40.24 | 0.687 | 3.664 |
+
+These are famous public-domain works, so the numbers measure familiarity with those texts more than quality; 510
+scored positions per language; no accuracy or human evaluation.
+
+```bash
+scripts/.venv/bin/python scripts/lang_kl.py ref qwen REF_QWEN           # ~8.5 min CPU (HF bf16)
+scripts/.venv/bin/python scripts/lang_kl.py ours qwen3.5-2b metal-int4 models/qwen3.5-2b/model.int4.qt REF_QWEN qwen_ours_int4.json
+scripts/.venv/bin/python scripts/lang_kl.py table RESULTS_DIR
+scripts/.venv/bin/python scripts/lang_kl.py tpc
+scripts/.venv/bin/python scripts/lang_kl.py bpc docs/bench/raw/qwen_lang_kl
+```

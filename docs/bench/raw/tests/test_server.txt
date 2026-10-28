@@ -34,8 +34,8 @@ PASS  rejections are counted in metrics
 PASS  cancelling a queued request frees its queue slot at once (no 429 for the next client)
 PASS  KV pool exhaustion preempts (1 preemptions) and recomputes: outputs still == sequential greedy
 PASS  all KV blocks and state slots free after preempted requests finish
-PASS  real uvicorn: SSE chunks arrive as they are generated (first 0.32s, last 2.49s)
-PASS  real uvicorn: a non-streaming request whose client gave up is cancelled (22 of 400 tokens made), blocks and state slot freed
+PASS  real uvicorn: SSE chunks arrive as they are generated (first 0.66s, last 4.66s)
+PASS  real uvicorn: a non-streaming request whose client gave up is cancelled (27 of 400 tokens made), blocks and state slot freed
 PASS  its request_finished log line says finish_reason 'cancelled' (the engine stops it one step after the handler logs)
 PASS  a stop-string completion is logged with finish_reason 'stop', what the client got ('stop')
 PASS  /metrics shows a request queued behind a step still in progress (waiting 1, running 1)

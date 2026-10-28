@@ -11,7 +11,6 @@ import torch
 
 from backend.pinning import lock_in_memory, model_tensors
 from sampler import SamplingParams, sample, sample_batch
-from server.prefix import PinnedPrefix
 from state import OutOfBlocks
 
 
@@ -39,7 +38,6 @@ class Request:
     generator: torch.Generator | None = None
     cancelled: bool = False
     finish_reason: str | None = None
-    cached: int = 0                                       # prompt tokens borrowed from the pinned preamble (prefix.py)
 
 
 def _settle(fut: concurrent.futures.Future, result=None, error: Exception | None = None) -> None:
@@ -53,7 +51,7 @@ def _settle(fut: concurrent.futures.Future, result=None, error: Exception | None
 class Scheduler:
     def __init__(self, engine, metrics, max_batch: int = 8, max_waiting: int = 64, kv_blocks: int = 1024,
                  block_size: int = 16, max_model_len: int = 4096, prefill_chunk: int = 512,
-                 batch_wait_ms: float = 5.0, lock_weights: bool = False, prefix_cache: bool = False):
+                 batch_wait_ms: float = 5.0, lock_weights: bool = False):
         if not 1 <= max_batch <= 32:                          # batched decode kernels cover up to 32 rows
             raise ValueError("max_batch must be between 1 and 32")
         self.eng, self.metrics = engine, metrics
@@ -62,15 +60,11 @@ class Scheduler:
             raise ValueError("prefill_chunk must be at least 1")
         if not 0 <= batch_wait_ms <= 1000:                    # also rejects NaN and inf (a wait that long raises)
             raise ValueError("batch_wait_ms must be between 0 and 1000")
-        cap = getattr(engine, "max_model_len", None)          # a model's own limit (registry and model)
         self.max_batch, self.max_waiting = max_batch, max_waiting
-        self.max_model_len = min(max_model_len, cap) if cap else max_model_len
+        self.max_model_len = max_model_len
         self.prefill_chunk = prefill_chunk
         self.batch_wait = batch_wait_ms / 1e3
-        # the pool's units: blocks of every layer (Qwen3.5), or of one layer group (Tiny Aya, whose sliding layers keep
-        # a ring of blocks per sequence, sized for chunks of at most prefill_chunk tokens)
-        self.pool = self.model.new_paged_pool(kv_blocks, block_size, max_seqs=max(max_batch, 2),
-                                              max_chunk=prefill_chunk)
+        self.pool = self.model.new_paged_pool(kv_blocks, block_size, max_seqs=max(max_batch, 2))
         self.block_size = block_size
         self.waiting: collections.deque[Request] = collections.deque()
         self.prefilling: list[Request] = []                  # admitted, prompt partly in the state
@@ -84,8 +78,6 @@ class Scheduler:
         self._ids = itertools.count()
         self._arrivals = 0                                    # submitted so far: the batching window counts these
         self._warmup()                                        # every layer has run: the weight cache is complete
-        self.prefix, self.prefix_note = PinnedPrefix.build(self) if prefix_cache else (None, "off")
-        self.pinned = self.prefix.units if self.prefix else 0
         # keep the weights in RAM (MPS only): otherwise an idle server's weights get compressed or swapped and the
         # next request waits for them to come back (backend/pinning.py)
         self.weights_locked, self.lock_error = 0, None
@@ -95,10 +87,9 @@ class Scheduler:
             except (OSError, ValueError) as e:                # serve anyway, without the guarantee
                 self.lock_error = str(e)
         metrics.set("weights_locked_bytes", self.weights_locked)
-        metrics.set("kv_blocks_total", self.pool.allocator.num_blocks)            # in units of the pool
+        metrics.set("kv_blocks_total", self.pool.allocator.num_blocks)
         metrics.set("kv_unit_bytes", self.pool.unit_bytes)
         metrics.set("kv_blocks_free", self.pool.allocator.num_free)
-        metrics.set("prefix_pinned_units", self.pinned)
         self.thread = threading.Thread(target=self._loop, name="engine", daemon=True)
         self.thread.start()
 
@@ -117,11 +108,9 @@ class Scheduler:
             raise ValueError("empty prompt")
         if len(prompt_ids) + max_new_tokens > self.max_model_len:
             raise ValueError(f"prompt ({len(prompt_ids)}) + max_tokens ({max_new_tokens}) exceeds {self.max_model_len}")
-        cached, bypass = self.prefix.match(prompt_ids, max_new_tokens) if self.prefix else (0, False)
-        own = self._blocks_for(len(prompt_ids) + max_new_tokens) - (self.pinned if cached else 0)
-        if own > self.pool.allocator.num_blocks - self.pinned:          # would wait or be preempted forever
-            raise ValueError("request can never fit in the KV pool")
-        req = Request(f"req-{next(self._ids)}", list(prompt_ids), params, max_new_tokens, cached=cached)
+        if self._blocks_for(len(prompt_ids) + max_new_tokens) > self.pool.allocator.num_blocks:
+            raise ValueError("request can never fit in the KV pool")      # would wait or be preempted forever
+        req = Request(f"req-{next(self._ids)}", list(prompt_ids), params, max_new_tokens)
         if out is not None:
             req.out = out
         if params.seed is not None:
@@ -135,8 +124,6 @@ class Scheduler:
             self._arrivals += 1
             self.metrics.inc("requests_total")
             self.metrics.inc("prompt_tokens_total", len(prompt_ids))
-            if cached or bypass:
-                self.metrics.inc("prefix_hits_total" if cached else "prefix_bypasses_total")
             self.cond.notify()
         return req
 
@@ -246,24 +233,21 @@ class Scheduler:
                 if req.cancelled:
                     self.waiting.popleft(); self._finish(req, "cancelled"); continue
                 ids = req.prompt_ids + req.generated          # a preempted request recomputes what it produced
-                # headroom: keep one step's growth free per sequence in flight (a unit per group), since each may
-                # cross a block boundary on its next step; otherwise the newcomer would be preempted right away and
-                # its prefill wasted
-                own = self._blocks_for(len(ids) + 1) - (self.pinned if req.cached else 0)   # a hit borrows the rest
-                if own + in_flight * self.pool.max_step_units > self.pool.allocator.num_free:
+                # headroom: keep one step's growth free per sequence in flight, since each may cross a block
+                # boundary on its next step; otherwise the newcomer would be preempted right away and its prefill
+                # wasted
+                if self._blocks_for(len(ids) + 1) + in_flight > self.pool.allocator.num_free:
                     return                                    # wait for running requests to free blocks
                 if not self.pool.free_seqs:
                     return                                    # wait for a DeltaNet state slot too
                 self.waiting.popleft()
             try:
                 req.state = self.model.new_paged_state(self.pool)
-                if req.cached:                                # the preamble's units first: reserve counts them
-                    self.prefix.attach(req.state)             # (a preempted hit borrows them again)
                 req.state.reserve(len(ids))                   # every prompt block now: chunks can never run out
             except Exception as e:                            # fail this request, not the server
                 self._finish(req, "error", f"admission failed: {e}")
                 continue
-            req.to_prefill, req.prefill_pos = ids, req.state.length   # a hit starts after the preamble
+            req.to_prefill, req.prefill_pos = ids, req.state.length
             self.prefilling.append(req)
 
     def _prefill_step(self) -> None:
